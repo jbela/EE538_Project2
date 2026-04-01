@@ -6,88 +6,185 @@
     <title>Lecture Assistant</title>
     <style>
       :root {
-        color-scheme: light;
+        --bg: #f4f7fb;
+        --card: #ffffff;
+        --text: #111827;
+        --muted: #6b7280;
+        --line: #e5e7eb;
+        --primary: #2563eb;
+        --primary-hover: #1d4ed8;
+        --success-bg: #ecfdf3;
+        --success-text: #166534;
       }
+
+      * { box-sizing: border-box; }
+
       body {
-        font-family: Arial, sans-serif;
-        width: 360px;
         margin: 0;
+        width: 380px;
+        font-family: Inter, Segoe UI, Arial, sans-serif;
+        background: linear-gradient(180deg, #eef4ff 0%, var(--bg) 40%);
+        color: var(--text);
         padding: 14px;
-        color: #1f2937;
       }
-      h1 {
+
+      .shell {
+        border: 1px solid #dbe3f0;
+        border-radius: 16px;
+        background: rgba(255, 255, 255, 0.88);
+        backdrop-filter: blur(4px);
+        box-shadow: 0 10px 26px rgba(37, 99, 235, 0.08);
+        overflow: hidden;
+      }
+
+      .header {
+        padding: 14px 14px 10px 14px;
+        border-bottom: 1px solid var(--line);
+        background: linear-gradient(135deg, #dbeafe 0%, #eff6ff 100%);
+      }
+
+      .title {
+        margin: 0;
         font-size: 18px;
-        margin: 0 0 10px 0;
+        font-weight: 700;
       }
-      h2 {
-        font-size: 14px;
-        margin: 0 0 8px 0;
-      }
-      .card {
-        border: 1px solid #e5e7eb;
-        border-radius: 10px;
-        padding: 10px;
-        margin-bottom: 10px;
-        background: #fafafa;
-      }
-      .row {
-        display: flex;
-        gap: 8px;
-        flex-wrap: wrap;
-      }
-      button {
-        border: 1px solid #d1d5db;
-        background: white;
-        border-radius: 8px;
-        padding: 8px 10px;
-        cursor: pointer;
-      }
-      button:hover {
-        background: #f3f4f6;
-      }
-      #status {
+
+      .subtitle {
+        margin: 4px 0 0 0;
         font-size: 12px;
         color: #374151;
       }
-      textarea {
-        width: 100%;
-        min-height: 120px;
-        resize: vertical;
+
+      .content {
+        padding: 12px;
       }
+
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        background: var(--card);
+        padding: 11px;
+        margin-bottom: 10px;
+      }
+
+      .card h2 {
+        margin: 0 0 8px 0;
+        font-size: 13px;
+      }
+
       .hint {
         font-size: 12px;
-        color: #6b7280;
-        margin-top: 6px;
+        color: var(--muted);
+        margin-top: 8px;
+        line-height: 1.35;
+      }
+
+      input[type="file"] {
+        width: 100%;
+        border: 1px dashed #c7d2fe;
+        border-radius: 10px;
+        padding: 8px;
+        background: #f8faff;
+      }
+
+      .row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px;
+      }
+
+      button {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 9px 10px;
+        cursor: pointer;
+        background: #fff;
+        color: #1f2937;
+        font-weight: 600;
+        transition: 0.15s ease;
+      }
+
+      button:hover {
+        transform: translateY(-1px);
+        box-shadow: 0 6px 14px rgba(17, 24, 39, 0.07);
+      }
+
+      #uploadBtn, #extractBtn {
+        background: var(--primary);
+        color: #fff;
+        border-color: transparent;
+      }
+
+      #uploadBtn:hover, #extractBtn:hover {
+        background: var(--primary-hover);
+      }
+
+      #clearBtn {
+        grid-column: span 2;
+        background: #f9fafb;
+      }
+
+      #status {
+        font-size: 12px;
+        color: var(--success-text);
+        background: var(--success-bg);
+        border: 1px solid #bbf7d0;
+        border-radius: 8px;
+        padding: 8px;
+        line-height: 1.35;
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 140px;
+        resize: vertical;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px;
+        background: #fcfdff;
+        color: #111827;
+        line-height: 1.4;
+      }
+
+      textarea::placeholder {
+        color: #9ca3af;
       }
     </style>
   </head>
   <body>
-    <h1>Lecture Assistant</h1>
-
-    <div class="card">
-      <h2>1) Input</h2>
-      <input id="file" type="file" accept="audio/*,video/*" />
-      <div class="hint">Upload a lecture file or use current page extraction.</div>
-    </div>
-
-    <div class="card">
-      <h2>2) Actions</h2>
-      <div class="row">
-        <button id="uploadBtn">Queue Upload</button>
-        <button id="extractBtn">Extract Current Page</button>
-        <button id="clearBtn">Clear Output</button>
+    <div class="shell">
+      <div class="header">
+        <h1 class="title">Lecture Assistant</h1>
+        <p class="subtitle">Extract content and view summary in one clean panel</p>
       </div>
-      <div class="hint">Output box shows only the summarized text.</div>
-    </div>
 
-    <div class="card">
-      <h2>3) Status</h2>
-      <div id="status">Idle. Waiting for your action.</div>
-    </div>
+      <div class="content">
+        <div class="card">
+          <h2>Input</h2>
+          <input id="file" type="file" accept="audio/*,video/*" />
+          <div class="hint">Upload a lecture file or use the current webpage as source.</div>
+        </div>
 
-    <div class="card">
-      <h2>Output</h2>
-      <textarea id="result" placeholder="Logs and extracted metadata will appear here..."></textarea>
+        <div class="card">
+          <h2>Actions</h2>
+          <div class="row">
+            <button id="uploadBtn">Upload & Summarize</button>
+            <button id="extractBtn">Summarize Current Page</button>
+            <button id="clearBtn">Clear Output</button>
+          </div>
+          <div class="hint">Output area will display summarized text only.</div>
+        </div>
+
+        <div class="card">
+          <h2>Status</h2>
+          <div id="status">Idle. Waiting for your action.</div>
+        </div>
+
+        <div class="card" style="margin-bottom:0">
+          <h2>Summary Output</h2>
+          <textarea id="result" placeholder="Your summary will appear here..."></textarea>
+        </div>
+      </div>
     </div>
 
     <script src="popup.js"></script>
