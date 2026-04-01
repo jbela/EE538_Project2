@@ -12,8 +12,11 @@ app.use(express.json());
 
 const jobs = new Map();
 
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
 app.get('/health', (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, llm: OPENAI_API_KEY ? 'openai-enabled' : 'heuristic-only' });
 });
 
 app.post('/jobs', upload.single('file'), (req, res) => {
@@ -24,9 +27,7 @@ app.post('/jobs', upload.single('file'), (req, res) => {
     jobs.set(jobId, {
       status: 'done',
       result: {
-        summary: 'Stub summary: replace with Python worker output.',
-        topics: ['Topic A', 'Topic B'],
-        notes: ['Key point 1', 'Key point 2']
+        summary: 'Stub summary: replace with Python worker output.'
       }
     });
   }, 3000);
@@ -44,36 +45,90 @@ function simpleSummarize(text) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   if (!clean) {
     return {
-      summary: 'No extractable transcript/text found on page.',
-      topics: [],
-      notes: []
+      summary: 'No extractable transcript/text found on page.'
     };
   }
 
   const sentences = clean.split(/(?<=[.!?])\s+/).filter(Boolean);
   const summary = sentences.slice(0, 3).join(' ').slice(0, 600);
 
-  const stop = new Set(['the','a','an','and','or','to','of','in','on','for','is','are','was','were','be','by','with','as','that','this','it','from','at','we','you','they','he','she','i']);
-  const freq = new Map();
-  for (const w of clean.toLowerCase().match(/[a-z]{3,}/g) || []) {
-    if (stop.has(w)) continue;
-    freq.set(w, (freq.get(w) || 0) + 1);
-  }
-  const topics = [...freq.entries()].sort((a,b)=>b[1]-a[1]).slice(0,5).map(([w]) => w);
-  const notes = sentences.slice(0, 5).map(s => s.slice(0, 140));
-
-  return { summary, topics, notes };
+  return { summary };
 }
 
-app.post('/summarize-text', (req, res) => {
-  const { title, url, transcript, pageText } = req.body || {};
-  const sourceText = transcript || pageText || '';
-  const result = simpleSummarize(sourceText);
-  res.json({
-    title: title || null,
-    url: url || null,
-    ...result
+async function openAISummarize(text, { title, url } = {}) {
+  const prompt = [
+    'You are a lecture summarizer.',
+    'Return only a concise plain-text summary (no markdown, no bullets unless needed).',
+    'Focus on key ideas and actionable takeaways.',
+    '',
+    title ? `Page title: ${title}` : '',
+    url ? `Page URL: ${url}` : '',
+    '',
+    'Content:',
+    text
+  ].filter(Boolean).join('\n');
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      model: OPENAI_MODEL,
+      temperature: 0.2,
+      messages: [
+        { role: 'system', content: 'Summarize clearly and accurately.' },
+        { role: 'user', content: prompt }
+      ]
+    })
   });
+
+  if (!response.ok) {
+    const err = await response.text();
+    throw new Error(`OpenAI error ${response.status}: ${err}`);
+  }
+
+  const data = await response.json();
+  const summary = data?.choices?.[0]?.message?.content?.trim();
+  if (!summary) throw new Error('OpenAI returned empty summary.');
+  return { summary };
+}
+
+app.post('/summarize-text', async (req, res) => {
+  try {
+    const { title, url, transcript, pageText } = req.body || {};
+    const sourceText = String(transcript || pageText || '').trim();
+
+    if (!sourceText) {
+      return res.json({
+        title: title || null,
+        url: url || null,
+        summary: 'No extractable transcript/text found on page.',
+        model: OPENAI_API_KEY ? OPENAI_MODEL : 'heuristic-fallback'
+      });
+    }
+
+    let result;
+    let model;
+
+    if (OPENAI_API_KEY) {
+      result = await openAISummarize(sourceText, { title, url });
+      model = OPENAI_MODEL;
+    } else {
+      result = simpleSummarize(sourceText);
+      model = 'heuristic-fallback';
+    }
+
+    res.json({
+      title: title || null,
+      url: url || null,
+      summary: result.summary,
+      model
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message || 'summarization failed' });
+  }
 });
 
 app.get('/search', (req, res) => {
@@ -83,4 +138,5 @@ app.get('/search', (req, res) => {
 
 app.listen(port, () => {
   console.log(`Backend listening on http://localhost:${port}`);
+  console.log(OPENAI_API_KEY ? `LLM enabled: ${OPENAI_MODEL}` : 'LLM disabled: using heuristic fallback');
 });
