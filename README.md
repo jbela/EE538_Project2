@@ -1,38 +1,31 @@
 # EE538 Project 2 - Lecture Assistant
 
-Chrome extension + backend for webpage/video summary demo.
+A Chrome extension + local backend that summarizes webpage lecture content.
 
 ## Folders
-- `extension/` - Chrome extension UI and extraction scripts
-- `backend/` - Node backend (easy default)
-- `cpp-backend/` - C++ backend (now supports `/summarize-text`)
-- `cpp-worker/` - C++ worker starter
+- `extension/` - Chrome extension UI and page extraction
+- `backend/` - Node.js API for summarize and job endpoints
+- `cpp-backend/`, `cpp-worker/` - optional C++ starter code
 
-## Quick Start (Node backend)
+## Quick Start
+### 1) Start backend
 ```bash
 cd backend
 npm install
 npm start
 ```
 
-## Quick Start (C++ backend on Windows)
-```bat
-cd cpp-backend
-build.bat
-server.exe
-```
+### 2) Load extension
+- Open `chrome://extensions`
+- Enable Developer mode
+- Click **Load unpacked**
+- Select `extension/`
 
-## Load Extension
-1. Open `chrome://extensions`
-2. Turn on Developer mode
-3. Click **Load unpacked**
-4. Select `extension/`
-
-## Use
+### 3) Use it
 - Open a webpage
-- Open extension popup
+- Open the extension popup
 - Click **Summarize Current Page**
-- Output box shows summary text only
+- Output box shows summary text
 
 ## API
 - `GET /health`
@@ -41,5 +34,6 @@ server.exe
 - `GET /jobs/:id`
 
 ## Notes
+- Best results on pages with readable text/transcript content
 - Some protected video sites may block extraction
-- If `Failed to fetch`, make sure backend is running on `http://localhost:3000`
+- If `Failed to fetch`, check backend is running on `http://localhost:3000`
