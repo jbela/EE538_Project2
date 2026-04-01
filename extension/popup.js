@@ -113,6 +113,12 @@ function clearOutput() {
   setStatus('Idle. Waiting for your action.');
 }
 
+$('file').addEventListener('change', () => {
+  const f = $('file').files?.[0];
+  const name = f ? f.name : 'No file selected';
+  $('fileName').textContent = name;
+});
+
 $('uploadBtn').addEventListener('click', async () => {
   try {
     await runFileSummary();

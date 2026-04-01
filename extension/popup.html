@@ -80,11 +80,34 @@
       }
 
       input[type="file"] {
-        width: 100%;
-        border: 1px dashed #c7d2fe;
+        display: none;
+      }
+
+      .file-picker {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .file-btn {
+        border: 1px solid var(--line);
         border-radius: 10px;
-        padding: 8px;
+        padding: 8px 10px;
         background: #f8faff;
+        color: #1f2937;
+        font-size: 12px;
+        font-weight: 600;
+        cursor: pointer;
+        user-select: none;
+      }
+
+      .file-name {
+        font-size: 12px;
+        color: var(--muted);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        max-width: 220px;
       }
 
       .row {
@@ -161,6 +184,10 @@
       <div class="content">
         <div class="card">
           <h2>Input</h2>
+          <div class="file-picker">
+            <label class="file-btn" for="file">Choose File</label>
+            <span id="fileName" class="file-name">No file selected</span>
+          </div>
           <input id="file" type="file" accept="audio/*,video/*" />
           <div class="hint">Upload a lecture file or use the current webpage as source.</div>
         </div>
