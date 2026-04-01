@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
+import fs from 'fs/promises';
 
 const app = express();
 const port = 3000;
@@ -21,18 +22,26 @@ app.get('/health', (_req, res) => {
 
 app.post('/jobs', upload.single('file'), (req, res) => {
   const jobId = uuidv4();
-  jobs.set(jobId, { status: 'queued', createdAt: Date.now() });
+  const file = req.file || null;
 
-  setTimeout(() => {
+  jobs.set(jobId, {
+    status: 'queued',
+    createdAt: Date.now(),
+    input: {
+      filename: file?.originalname || null,
+      mimetype: file?.mimetype || null,
+      size: file?.size || null
+    }
+  });
+
+  processUploadedMediaJob(jobId, file).catch((error) => {
     jobs.set(jobId, {
-      status: 'done',
-      result: {
-        summary: 'Stub summary: replace with Python worker output.'
-      }
+      status: 'failed',
+      error: error.message || 'job failed'
     });
-  }, 3000);
+  });
 
-  res.status(202).json({ jobId, filename: req.file?.originalname || null });
+  res.status(202).json({ jobId, filename: file?.originalname || null });
 });
 
 app.get('/jobs/:id', (req, res) => {
@@ -44,21 +53,44 @@ app.get('/jobs/:id', (req, res) => {
 function simpleSummarize(text) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   if (!clean) {
-    return {
-      summary: 'No extractable transcript/text found on page.'
-    };
+    return { summary: 'No extractable transcript/text found on page.' };
   }
 
   const sentences = clean.split(/(?<=[.!?])\s+/).filter(Boolean);
   const summary = sentences.slice(0, 3).join(' ').slice(0, 600);
-
   return { summary };
 }
 
-async function openAISummarize(text, { title, url } = {}) {
+function chunkText(text, maxChars = 2800) {
+  const clean = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+
+  const sentences = clean.split(/(?<=[.!?])\s+/).filter(Boolean);
+  const chunks = [];
+  let current = '';
+
+  for (const s of sentences) {
+    if ((current + ' ' + s).trim().length > maxChars) {
+      if (current.trim()) chunks.push(current.trim());
+      current = s;
+    } else {
+      current += (current ? ' ' : '') + s;
+    }
+  }
+
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
+}
+
+async function openAISummarize(text, { title, url, mode = 'generic' } = {}) {
+  const modeLine = mode === 'video'
+    ? 'This content comes from a lecture video transcript. Keep timeline coherence when possible.'
+    : 'This content comes from webpage extracted text.';
+
   const prompt = [
     'You are a lecture summarizer.',
-    'Return only a concise plain-text summary (no markdown, no bullets unless needed).',
+    'Return only concise plain text.',
+    modeLine,
     'Focus on key ideas and actionable takeaways.',
     '',
     title ? `Page title: ${title}` : '',
@@ -95,6 +127,102 @@ async function openAISummarize(text, { title, url } = {}) {
   return { summary };
 }
 
+async function summarizeLongText(text, meta = {}) {
+  const chunks = chunkText(text, 2800);
+  if (!chunks.length) {
+    return {
+      summary: 'No extractable transcript/text found on page.',
+      chunkCount: 0,
+      timeline: []
+    };
+  }
+
+  const timeline = [];
+  const partials = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    const chunk = chunks[i];
+    let partial;
+
+    if (OPENAI_API_KEY) {
+      partial = await openAISummarize(chunk, meta);
+    } else {
+      partial = simpleSummarize(chunk);
+    }
+
+    partials.push(partial.summary);
+    timeline.push({
+      section: i + 1,
+      startSec: i * 180,
+      endSec: (i + 1) * 180,
+      summary: partial.summary
+    });
+  }
+
+  const merged = partials.join('\n\n');
+  const final = OPENAI_API_KEY
+    ? await openAISummarize(merged, { ...meta, mode: 'video' })
+    : simpleSummarize(merged);
+
+  return {
+    summary: final.summary,
+    chunkCount: chunks.length,
+    timeline
+  };
+}
+
+async function transcribeUploadedMediaStub(file) {
+  // Phase-1 skeleton: no real ASR yet.
+  // Future: replace this with ffmpeg audio extraction + Whisper transcription.
+  const filename = file?.originalname || 'uploaded media';
+  return [
+    `Transcript stub for ${filename}.`,
+    'This placeholder transcript represents what an ASR engine would output.',
+    'In production, this step will extract audio from video and run speech-to-text.',
+    'Then chunked summarization will build an overall summary and timeline highlights.'
+  ].join(' ');
+}
+
+async function processUploadedMediaJob(jobId, file) {
+  jobs.set(jobId, { status: 'processing', stage: 'transcribing' });
+
+  if (!file) {
+    throw new Error('No uploaded file found in request.');
+  }
+
+  const transcript = await transcribeUploadedMediaStub(file);
+
+  jobs.set(jobId, { status: 'processing', stage: 'summarizing' });
+
+  const summarized = await summarizeLongText(transcript, {
+    title: file.originalname,
+    mode: 'video'
+  });
+
+  jobs.set(jobId, {
+    status: 'done',
+    result: {
+      summary: summarized.summary,
+      timeline: summarized.timeline,
+      meta: {
+        filename: file.originalname,
+        mimetype: file.mimetype,
+        size: file.size,
+        chunkCount: summarized.chunkCount,
+        model: OPENAI_API_KEY ? OPENAI_MODEL : 'heuristic-fallback',
+        pipeline: 'phase1-video-skeleton'
+      }
+    }
+  });
+
+  // cleanup temp upload file
+  try {
+    await fs.unlink(file.path);
+  } catch (_) {
+    // ignore cleanup errors
+  }
+}
+
 app.post('/summarize-text', async (req, res) => {
   try {
     const { title, url, transcript, pageText } = req.body || {};
@@ -109,22 +237,15 @@ app.post('/summarize-text', async (req, res) => {
       });
     }
 
-    let result;
-    let model;
-
-    if (OPENAI_API_KEY) {
-      result = await openAISummarize(sourceText, { title, url });
-      model = OPENAI_MODEL;
-    } else {
-      result = simpleSummarize(sourceText);
-      model = 'heuristic-fallback';
-    }
+    const result = OPENAI_API_KEY
+      ? await openAISummarize(sourceText, { title, url, mode: 'generic' })
+      : simpleSummarize(sourceText);
 
     res.json({
       title: title || null,
       url: url || null,
       summary: result.summary,
-      model
+      model: OPENAI_API_KEY ? OPENAI_MODEL : 'heuristic-fallback'
     });
   } catch (error) {
     res.status(500).json({ error: error.message || 'summarization failed' });
