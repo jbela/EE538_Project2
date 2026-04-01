@@ -50,14 +50,66 @@ app.get('/jobs/:id', (req, res) => {
   res.json(job);
 });
 
+function splitSentences(text) {
+  return String(text || '')
+    .replace(/\s+/g, ' ')
+    .split(/(?<=[.!?])\s+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function tokenize(text) {
+  return String(text || '').toLowerCase().match(/[a-z][a-z0-9'-]{1,}/g) || [];
+}
+
 function simpleSummarize(text) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
   if (!clean) {
     return { summary: 'No extractable transcript/text found on page.' };
   }
 
-  const sentences = clean.split(/(?<=[.!?])\s+/).filter(Boolean);
-  const summary = sentences.slice(0, 3).join(' ').slice(0, 600);
+  const sentences = splitSentences(clean);
+  if (!sentences.length) {
+    return { summary: clean.slice(0, 600) };
+  }
+
+  const stop = new Set([
+    'the','a','an','and','or','to','of','in','on','for','is','are','was','were','be','been','being',
+    'by','with','as','that','this','it','from','at','we','you','they','he','she','i','my','our','your',
+    'their','but','if','then','so','than','into','about','over','under','after','before','can','could',
+    'should','would','will','just','also','not','no','yes','do','does','did','have','has','had'
+  ]);
+
+  const freq = new Map();
+  for (const w of tokenize(clean)) {
+    if (stop.has(w) || w.length < 3) continue;
+    freq.set(w, (freq.get(w) || 0) + 1);
+  }
+
+  const scored = sentences.map((s, idx) => {
+    const words = tokenize(s).filter((w) => !stop.has(w));
+    let score = 0;
+    for (const w of words) score += freq.get(w) || 0;
+
+    // Light bias toward earlier sentences and medium length informative lines.
+    const positionBoost = Math.max(0, 1.2 - idx * 0.08);
+    const len = s.length;
+    const lengthBoost = len >= 40 && len <= 220 ? 1.1 : 0.9;
+
+    return { sentence: s, idx, score: score * positionBoost * lengthBoost };
+  });
+
+  const pickCount = Math.min(4, Math.max(2, Math.ceil(sentences.length * 0.18)));
+  const selected = scored
+    .sort((a, b) => b.score - a.score)
+    .slice(0, pickCount)
+    .sort((a, b) => a.idx - b.idx)
+    .map((x) => x.sentence);
+
+  let summary = selected.join(' ');
+  if (!summary) summary = sentences.slice(0, 3).join(' ');
+  if (summary.length > 700) summary = summary.slice(0, 700);
+
   return { summary };
 }
 
