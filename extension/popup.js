@@ -113,6 +113,32 @@ function clearOutput() {
   setStatus('Idle. Waiting for your action.');
 }
 
+function appendChatMessage(role, text) {
+  const box = $('chatBox');
+  const msg = document.createElement('div');
+  msg.className = `chat-msg ${role}`;
+  msg.textContent = text;
+  box.appendChild(msg);
+  box.scrollTop = box.scrollHeight;
+}
+
+function handleChatSend() {
+  const input = $('chatInput');
+  const text = (input.value || '').trim();
+  if (!text) return;
+
+  appendChatMessage('user', text);
+  input.value = '';
+
+  const placeholderReply = $('result').value
+    ? 'No LLM connected yet.'
+    : 'No LLM: summarize first.';
+
+  setTimeout(() => {
+    appendChatMessage('assistant', placeholderReply);
+  }, 250);
+}
+
 $('file').addEventListener('change', () => {
   const f = $('file').files?.[0];
   const name = f ? f.name : 'No file selected';
@@ -139,3 +165,7 @@ $('extractBtn').addEventListener('click', async () => {
 });
 
 $('clearBtn').addEventListener('click', clearOutput);
+$('chatSendBtn').addEventListener('click', handleChatSend);
+$('chatInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') handleChatSend();
+});
