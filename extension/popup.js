@@ -1,14 +1,4 @@
-const API_BASE = 'http://localhost:3000';
-
-async function summarizeText(payload) {
-  const res = await fetch(`${API_BASE}/summarize-text`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) throw new Error(`Summarize failed: ${res.status}`);
-  return res.json();
-}
+const $ = (id) => document.getElementById(id);
 
 async function getActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -18,7 +8,6 @@ async function getActiveTab() {
 async function ensureContentScript(tabId) {
   try {
     await chrome.tabs.sendMessage(tabId, { type: 'ping' });
-    return;
   } catch (_) {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -27,118 +16,74 @@ async function ensureContentScript(tabId) {
   }
 }
 
-async function extractFromPage() {
-  const tab = await getActiveTab();
-  if (!tab?.id) throw new Error('No active tab found');
-
-  if (!tab.url || !/^https?:/i.test(tab.url)) {
-    throw new Error('Open a normal http/https webpage first (not chrome:// or extension pages).');
-  }
-
-  await ensureContentScript(tab.id);
-  const response = await chrome.tabs.sendMessage(tab.id, { type: 'extract_content' });
-  if (!response?.ok) throw new Error(response?.error || 'Extraction failed');
-  return response.data;
+function setStatus(text) {
+  $('status').textContent = text;
 }
 
-async function submitJob(file) {
-  const form = new FormData();
-  form.append('file', file);
-  const res = await fetch(`${API_BASE}/jobs`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error(`Submit failed: ${res.status}`);
-  return res.json();
+function appendLog(text) {
+  const box = $('result');
+  const prefix = box.value ? '\n\n' : '';
+  box.value += `${prefix}${text}`;
 }
 
-async function getJob(id) {
-  const res = await fetch(`${API_BASE}/jobs/${id}`);
-  if (!res.ok) throw new Error(`Status failed: ${res.status}`);
-  return res.json();
-}
-
-async function runJob(file) {
-  const status = document.getElementById('status');
-  const result = document.getElementById('result');
-  result.value = '';
-
-  try {
-    status.textContent = 'Submitting...';
-
-    let job;
-    if (file) {
-      job = await submitJob(file);
-    } else {
-      const res = await fetch(`${API_BASE}/jobs`, { method: 'POST' });
-      if (!res.ok) throw new Error(`Submit failed: ${res.status}`);
-      job = await res.json();
-    }
-
-    const { jobId } = job;
-    status.textContent = `Job ${jobId} submitted. Processing...`;
-
-    for (let i = 0; i < 20; i++) {
-      await new Promise(r => setTimeout(r, 1000));
-      const j = await getJob(jobId);
-      if (j.status === 'done') {
-        status.textContent = 'Done.';
-        result.value = JSON.stringify(j.result, null, 2);
-        return;
-      }
-      if (j.status === 'failed') {
-        status.textContent = 'Failed.';
-        result.value = j.error || 'Unknown error';
-        return;
-      }
-      status.textContent = `Processing... (${j.status})`;
-    }
-
-    status.textContent = 'Still processing. Check backend logs.';
-  } catch (e) {
-    status.textContent = 'Error.';
-    result.value = e.message;
-  }
-}
-
-document.getElementById('submitBtn').addEventListener('click', async () => {
-  const fileInput = document.getElementById('file');
+async function queueUploadOnly() {
+  const fileInput = $('file');
   if (!fileInput.files.length) {
-    document.getElementById('status').textContent = 'Please choose a file first.';
+    setStatus('Please choose a file first.');
     return;
   }
-  await runJob(fileInput.files[0]);
-});
 
-document.getElementById('demoBtn').addEventListener('click', async () => {
-  await runJob(null);
-});
+  const file = fileInput.files[0];
+  setStatus('Upload queued (framework mode, no backend call).');
+  appendLog([
+    '[Upload Queued]',
+    `Name: ${file.name}`,
+    `Type: ${file.type || 'unknown'}`,
+    `Size: ${file.size} bytes`,
+    'Next step: connect backend endpoint in popup.js'
+  ].join('\n'));
+}
 
-document.getElementById('extractBtn').addEventListener('click', async () => {
-  const status = document.getElementById('status');
-  const result = document.getElementById('result');
-  result.value = '';
-
+async function extractPageFrameworkOnly() {
   try {
-    status.textContent = 'Extracting page content...';
-    const extracted = await extractFromPage();
+    const tab = await getActiveTab();
+    if (!tab?.id) throw new Error('No active tab found.');
 
-    status.textContent = 'Summarizing extracted content...';
-    const summarized = await summarizeText({
-      title: extracted.title,
-      url: extracted.url,
-      transcript: extracted.transcriptCandidate,
-      pageText: extracted.pageText
-    });
+    if (!tab.url || !/^https?:/i.test(tab.url)) {
+      throw new Error('Open a regular http/https page first.');
+    }
 
-    status.textContent = `Done. Videos found: ${extracted.videoCount}`;
-    result.value = JSON.stringify({ extractedMeta: {
-      title: extracted.title,
-      url: extracted.url,
-      videoCount: extracted.videoCount,
-      tracks: extracted.tracks,
-      transcriptLineCount: extracted.transcriptLineCount,
-      transcriptPreview: extracted.transcriptPreview
-    }, summary: summarized }, null, 2);
-  } catch (e) {
-    status.textContent = 'Error.';
-    result.value = e.message;
+    setStatus('Extracting page content...');
+    await ensureContentScript(tab.id);
+    const response = await chrome.tabs.sendMessage(tab.id, { type: 'extract_content' });
+
+    if (!response?.ok) {
+      throw new Error(response?.error || 'Extraction failed.');
+    }
+
+    const d = response.data || {};
+    setStatus('Extraction complete (framework mode).');
+
+    appendLog(JSON.stringify({
+      mode: 'framework-only',
+      title: d.title,
+      url: d.url,
+      videoCount: d.videoCount,
+      transcriptLineCount: d.transcriptLineCount,
+      transcriptPreview: d.transcriptPreview,
+      note: 'Summarization is intentionally not executed yet.'
+    }, null, 2));
+  } catch (err) {
+    setStatus('Error.');
+    appendLog(`[Error]\n${err.message}`);
   }
-});
+}
+
+function clearOutput() {
+  $('result').value = '';
+  setStatus('Idle. Waiting for your action.');
+}
+
+$('uploadBtn').addEventListener('click', queueUploadOnly);
+$('extractBtn').addEventListener('click', extractPageFrameworkOnly);
+$('clearBtn').addEventListener('click', clearOutput);

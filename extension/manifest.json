@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Lecture Summary Tool",
+  "name": "Lecture Assistant",
   "version": "0.1.0",
-  "description": "Upload lecture recordings and get summaries, topics, and notes.",
+  "description": "Lecture extension framework for upload, extraction, and future processing.",
   "permissions": ["storage", "activeTab", "scripting", "tabs"],
   "host_permissions": ["http://localhost:3000/*"],
   "action": {

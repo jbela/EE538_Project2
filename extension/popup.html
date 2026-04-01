@@ -1,33 +1,95 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Lecture Summary</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lecture Assistant</title>
     <style>
-      body { font-family: Arial, sans-serif; width: 320px; padding: 12px; }
-      textarea { width: 100%; height: 120px; }
-      .row { margin: 8px 0; }
-      button { padding: 8px 10px; }
-      #status { color: #444; font-size: 12px; }
+      :root {
+        color-scheme: light;
+      }
+      body {
+        font-family: Arial, sans-serif;
+        width: 360px;
+        margin: 0;
+        padding: 14px;
+        color: #1f2937;
+      }
+      h1 {
+        font-size: 18px;
+        margin: 0 0 10px 0;
+      }
+      h2 {
+        font-size: 14px;
+        margin: 0 0 8px 0;
+      }
+      .card {
+        border: 1px solid #e5e7eb;
+        border-radius: 10px;
+        padding: 10px;
+        margin-bottom: 10px;
+        background: #fafafa;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      button {
+        border: 1px solid #d1d5db;
+        background: white;
+        border-radius: 8px;
+        padding: 8px 10px;
+        cursor: pointer;
+      }
+      button:hover {
+        background: #f3f4f6;
+      }
+      #status {
+        font-size: 12px;
+        color: #374151;
+      }
+      textarea {
+        width: 100%;
+        min-height: 120px;
+        resize: vertical;
+      }
+      .hint {
+        font-size: 12px;
+        color: #6b7280;
+        margin-top: 6px;
+      }
     </style>
   </head>
   <body>
-    <h3>Lecture Summary</h3>
-    <div class="row">
+    <h1>Lecture Assistant</h1>
+
+    <div class="card">
+      <h2>1) Input</h2>
       <input id="file" type="file" accept="audio/*,video/*" />
+      <div class="hint">Upload a lecture file or use current page extraction.</div>
     </div>
-    <div class="row">
-      <button id="submitBtn">Submit File</button>
-      <button id="demoBtn">Run Demo Sample</button>
+
+    <div class="card">
+      <h2>2) Actions</h2>
+      <div class="row">
+        <button id="uploadBtn">Queue Upload</button>
+        <button id="extractBtn">Extract Current Page</button>
+        <button id="clearBtn">Clear Output</button>
+      </div>
+      <div class="hint">Framework only: processing is intentionally disabled for now.</div>
     </div>
-    <div class="row">
-      <button id="extractBtn">Extract This Page (No Recording)</button>
+
+    <div class="card">
+      <h2>3) Status</h2>
+      <div id="status">Idle. Waiting for your action.</div>
     </div>
-    <div id="status" class="row">Idle.</div>
-    <div class="row">
-      <textarea id="result" placeholder="Summary output will appear here..."></textarea>
+
+    <div class="card">
+      <h2>Output</h2>
+      <textarea id="result" placeholder="Logs and extracted metadata will appear here..."></textarea>
     </div>
+
     <script src="popup.js"></script>
   </body>
 </html>
