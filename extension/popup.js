@@ -1,4 +1,9 @@
+const API_BASE = 'http://localhost:3000';
 const $ = (id) => document.getElementById(id);
+
+function setStatus(text) {
+  $('status').textContent = text;
+}
 
 async function getActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -16,17 +21,31 @@ async function ensureContentScript(tabId) {
   }
 }
 
-function setStatus(text) {
-  $('status').textContent = text;
+async function submitJob(file) {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${API_BASE}/jobs`, { method: 'POST', body: form });
+  if (!res.ok) throw new Error(`Submit failed: ${res.status}`);
+  return res.json();
 }
 
-function appendLog(text) {
-  const box = $('result');
-  const prefix = box.value ? '\n\n' : '';
-  box.value += `${prefix}${text}`;
+async function getJob(id) {
+  const res = await fetch(`${API_BASE}/jobs/${id}`);
+  if (!res.ok) throw new Error(`Status failed: ${res.status}`);
+  return res.json();
 }
 
-async function queueUploadOnly() {
+async function summarizeText(payload) {
+  const res = await fetch(`${API_BASE}/summarize-text`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) throw new Error(`Summarize failed: ${res.status}`);
+  return res.json();
+}
+
+async function runFileSummary() {
   const fileInput = $('file');
   if (!fileInput.files.length) {
     setStatus('Please choose a file first.');
@@ -34,49 +53,59 @@ async function queueUploadOnly() {
   }
 
   const file = fileInput.files[0];
-  setStatus('Upload queued (framework mode, no backend call).');
-  appendLog([
-    '[Upload Queued]',
-    `Name: ${file.name}`,
-    `Type: ${file.type || 'unknown'}`,
-    `Size: ${file.size} bytes`,
-    'Next step: connect backend endpoint in popup.js'
-  ].join('\n'));
+  $('result').value = '';
+  setStatus('Submitting file...');
+
+  const { jobId } = await submitJob(file);
+
+  for (let i = 0; i < 20; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    const job = await getJob(jobId);
+
+    if (job.status === 'done') {
+      const summary = job?.result?.summary || 'No summary returned.';
+      $('result').value = summary;
+      setStatus('Done.');
+      return;
+    }
+
+    if (job.status === 'failed') {
+      throw new Error(job.error || 'Job failed.');
+    }
+
+    setStatus(`Processing... (${job.status})`);
+  }
+
+  throw new Error('Timed out while waiting for job result.');
 }
 
-async function extractPageFrameworkOnly() {
-  try {
-    const tab = await getActiveTab();
-    if (!tab?.id) throw new Error('No active tab found.');
+async function runPageSummary() {
+  const tab = await getActiveTab();
+  if (!tab?.id) throw new Error('No active tab found.');
 
-    if (!tab.url || !/^https?:/i.test(tab.url)) {
-      throw new Error('Open a regular http/https page first.');
-    }
-
-    setStatus('Extracting page content...');
-    await ensureContentScript(tab.id);
-    const response = await chrome.tabs.sendMessage(tab.id, { type: 'extract_content' });
-
-    if (!response?.ok) {
-      throw new Error(response?.error || 'Extraction failed.');
-    }
-
-    const d = response.data || {};
-    setStatus('Extraction complete (framework mode).');
-
-    appendLog(JSON.stringify({
-      mode: 'framework-only',
-      title: d.title,
-      url: d.url,
-      videoCount: d.videoCount,
-      transcriptLineCount: d.transcriptLineCount,
-      transcriptPreview: d.transcriptPreview,
-      note: 'Summarization is intentionally not executed yet.'
-    }, null, 2));
-  } catch (err) {
-    setStatus('Error.');
-    appendLog(`[Error]\n${err.message}`);
+  if (!tab.url || !/^https?:/i.test(tab.url)) {
+    throw new Error('Open a regular http/https page first.');
   }
+
+  setStatus('Extracting page content...');
+  await ensureContentScript(tab.id);
+  const response = await chrome.tabs.sendMessage(tab.id, { type: 'extract_content' });
+
+  if (!response?.ok) {
+    throw new Error(response?.error || 'Extraction failed.');
+  }
+
+  setStatus('Summarizing...');
+  const d = response.data || {};
+  const summarized = await summarizeText({
+    title: d.title,
+    url: d.url,
+    transcript: d.transcriptCandidate,
+    pageText: d.pageText
+  });
+
+  $('result').value = summarized?.summary || 'No summary returned.';
+  setStatus('Done.');
 }
 
 function clearOutput() {
@@ -84,6 +113,23 @@ function clearOutput() {
   setStatus('Idle. Waiting for your action.');
 }
 
-$('uploadBtn').addEventListener('click', queueUploadOnly);
-$('extractBtn').addEventListener('click', extractPageFrameworkOnly);
+$('uploadBtn').addEventListener('click', async () => {
+  try {
+    await runFileSummary();
+  } catch (err) {
+    setStatus('Error.');
+    $('result').value = err.message;
+  }
+});
+
+$('extractBtn').addEventListener('click', async () => {
+  try {
+    $('result').value = '';
+    await runPageSummary();
+  } catch (err) {
+    setStatus('Error.');
+    $('result').value = err.message;
+  }
+});
+
 $('clearBtn').addEventListener('click', clearOutput);
