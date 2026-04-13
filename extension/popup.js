@@ -1,5 +1,16 @@
 const API_BASE = 'http://localhost:3000';
+
+/**
+ * Local demo only — must match LIBRARY_API_KEY in web/.env. Do not publish this extension
+ * with a real secret; anyone can read extension source.
+ */
+const DEMO_LIBRARY_BASE = 'http://localhost:3001';
+const DEMO_LIBRARY_KEY = 'ee538-local-demo-library-key';
+
 const $ = (id) => document.getElementById(id);
+
+/** Last summarized source (page or file) for export metadata. */
+let lastSourceMeta = { title: '', url: '', transcript: '' };
 
 function setStatus(text) {
   $('status').textContent = text;
@@ -65,6 +76,8 @@ async function runFileSummary() {
     if (job.status === 'done') {
       const summary = job?.result?.summary || 'No summary returned.';
       $('result').value = summary;
+      const fn = job?.input?.filename || file.name;
+      lastSourceMeta = { title: fn || 'Uploaded media', url: '', transcript: '' };
       setStatus('Done.');
       return;
     }
@@ -105,12 +118,78 @@ async function runPageSummary() {
   });
 
   $('result').value = summarized?.summary || 'No summary returned.';
+  lastSourceMeta = {
+    title: (d.title || d.h1 || 'Web page').trim() || 'Web page',
+    url: d.url || '',
+    transcript: d.transcriptCandidate || '',
+  };
   setStatus('Done.');
 }
 
 function clearOutput() {
   $('result').value = '';
+  lastSourceMeta = { title: '', url: '', transcript: '' };
   setStatus('Idle. Waiting for your action.');
+}
+
+async function loadLibrarySettings() {
+  const { libraryBaseUrl, libraryToken } = await chrome.storage.local.get([
+    'libraryBaseUrl',
+    'libraryToken',
+  ]);
+  $('libraryBaseUrl').value = libraryBaseUrl || DEMO_LIBRARY_BASE;
+  $('libraryToken').value = libraryToken || DEMO_LIBRARY_KEY;
+}
+
+async function saveLibrarySettings() {
+  const libraryBaseUrl = ($('libraryBaseUrl').value || '').trim() || DEMO_LIBRARY_BASE;
+  const libraryToken = ($('libraryToken').value || '').trim() || DEMO_LIBRARY_KEY;
+  await chrome.storage.local.set({ libraryBaseUrl, libraryToken });
+  setStatus('Library settings saved.');
+}
+
+async function exportToLibrary() {
+  const summary = ($('result').value || '').trim();
+  if (!summary) {
+    setStatus('Summarize something first, then export.');
+    return;
+  }
+
+  const token = ($('libraryToken').value || '').trim() || DEMO_LIBRARY_KEY;
+  let base = ($('libraryBaseUrl').value || '').trim() || DEMO_LIBRARY_BASE;
+  base = base.replace(/\/$/, '');
+
+  const courseLabel = ($('courseLabel').value || '').trim();
+  const topic = ($('topic').value || '').trim();
+  const title = (lastSourceMeta.title || 'Untitled summary').trim() || 'Untitled summary';
+
+  setStatus('Exporting to library...');
+
+  const body = {
+    title,
+    summary,
+    kind: 'summary',
+    ...(lastSourceMeta.transcript ? { transcript: lastSourceMeta.transcript } : {}),
+    ...(lastSourceMeta.url ? { sourceUrl: lastSourceMeta.url } : {}),
+    ...(courseLabel ? { courseLabel } : {}),
+    ...(topic ? { topic } : {}),
+  };
+
+  const res = await fetch(`${base}/api/items`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Export failed (${res.status})`);
+  }
+
+  setStatus(`Exported: ${title}`);
 }
 
 function appendChatMessage(role, text) {
@@ -165,6 +244,26 @@ $('extractBtn').addEventListener('click', async () => {
 });
 
 $('clearBtn').addEventListener('click', clearOutput);
+
+loadLibrarySettings().catch(() => {});
+
+$('saveLibraryBtn').addEventListener('click', async () => {
+  try {
+    await saveLibrarySettings();
+  } catch (err) {
+    setStatus('Error saving settings.');
+    $('result').value = err.message;
+  }
+});
+
+$('exportLibraryBtn').addEventListener('click', async () => {
+  try {
+    await exportToLibrary();
+  } catch (err) {
+    setStatus('Export failed.');
+    $('result').value = err.message;
+  }
+});
 $('chatSendBtn').addEventListener('click', handleChatSend);
 $('chatInput').addEventListener('keydown', (e) => {
   if (e.key === 'Enter') handleChatSend();

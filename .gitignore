@@ -1,4 +1,8 @@
 backend/node_modules/
+backend/.env
+web/node_modules/
+web/.next/
+web/uploads/
 backend/uploads/
 worker/.venv/
 cpp-backend/build/

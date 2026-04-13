@@ -132,13 +132,13 @@
         box-shadow: 0 6px 14px rgba(17, 24, 39, 0.07);
       }
 
-      #uploadBtn, #extractBtn {
+      #uploadBtn, #extractBtn, #exportLibraryBtn {
         background: var(--primary);
         color: #fff;
         border-color: transparent;
       }
 
-      #uploadBtn:hover, #extractBtn:hover {
+      #uploadBtn:hover, #extractBtn:hover, #exportLibraryBtn:hover {
         background: var(--primary-hover);
       }
 
@@ -264,6 +264,55 @@
         <div class="card">
           <h2>Summary Output</h2>
           <textarea id="result" placeholder="Your summary will appear here..."></textarea>
+        </div>
+
+        <div class="card">
+          <h2>Export to web library</h2>
+          <p class="hint" style="margin-top: 0">
+            Demo: URL and access key are pre-filled (see <code>DEMO_LIBRARY_*</code> in <code>popup.js</code>, must match
+            <code>web/.env</code>). Run the web app on port 3001 and unlock <strong>/login</strong> with the same key.
+          </p>
+          <label class="hint" for="libraryBaseUrl" style="display: block; margin-top: 8px; font-weight: 600; color: var(--text)"
+            >Library base URL</label
+          >
+          <input
+            id="libraryBaseUrl"
+            type="url"
+            placeholder="http://localhost:3001 (demo default)"
+            style="width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px"
+          />
+          <label class="hint" for="libraryToken" style="display: block; margin-top: 8px; font-weight: 600; color: var(--text)"
+            >Access key</label
+          >
+          <input
+            id="libraryToken"
+            type="password"
+            placeholder="ee538-local-demo-library-key"
+            autocomplete="off"
+            style="width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px"
+          />
+          <label class="hint" for="courseLabel" style="display: block; margin-top: 8px; font-weight: 600; color: var(--text)"
+            >Course (optional)</label
+          >
+          <input
+            id="courseLabel"
+            type="text"
+            placeholder="e.g. EE538"
+            style="width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px"
+          />
+          <label class="hint" for="topic" style="display: block; margin-top: 8px; font-weight: 600; color: var(--text)"
+            >Topic (optional)</label
+          >
+          <input
+            id="topic"
+            type="text"
+            placeholder="e.g. Lecture 4 — Op amps"
+            style="width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px"
+          />
+          <div class="row" style="margin-top: 10px">
+            <button id="saveLibraryBtn" type="button">Save library settings</button>
+            <button id="exportLibraryBtn" type="button">Export to Library</button>
+          </div>
         </div>
 
         <div class="card" style="margin-bottom:0">

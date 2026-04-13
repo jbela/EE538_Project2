@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "description": "Lecture extension framework for upload, extraction, and future processing.",
   "permissions": ["storage", "activeTab", "scripting", "tabs"],
-  "host_permissions": ["http://localhost:3000/*"],
+  "host_permissions": ["http://localhost:3000/*", "http://localhost:3001/*"],
   "action": {
     "default_popup": "popup.html",
     "default_title": "Lecture Summary"

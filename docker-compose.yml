@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: lecture_library
+    ports:
+      - "5432:5432"
+    volumes:
+      - lecture_library_pg:/var/lib/postgresql/data
+
+volumes:
+  lecture_library_pg:

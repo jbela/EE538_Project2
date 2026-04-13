@@ -1,0 +1,35 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../app/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Unified material row: extension summaries, uploaded files, and personal notes.
+/// `studyArtifacts` reserved for future AI outputs (flashcards, study sheets, etc.).
+model LibraryItem {
+  id          String   @id @default(cuid())
+  title       String
+  summary     String   @db.Text
+  transcript  String?  @db.Text
+  sourceUrl   String?  @map("source_url")
+  courseLabel String?  @map("course_label")
+  topic       String?
+  /// summary | file_upload | text_note
+  kind        String   @default("summary")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  noteContent String? @map("note_content") @db.Text
+
+  originalFileName String? @map("original_file_name")
+  storedFileName   String? @unique @map("stored_file_name")
+  mimeType         String? @map("mime_type")
+  fileSize         Int?    @map("file_size")
+
+  studyArtifacts Json? @map("study_artifacts") @db.JsonB
+
+  @@map("library_items")
+}

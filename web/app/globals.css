@@ -1,0 +1,25 @@
+@import "tailwindcss";
+
+/* Light, airy palette — keep consistent regardless of system dark mode for this demo app */
+:root {
+  --background: #f6f7f9;
+  --foreground: #3f4a56;
+  --muted: #6b7785;
+  --border: #e4e8ee;
+  --card: #ffffff;
+  --accent: #5c9ccc;
+  --accent-foreground: #f8fafc;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
