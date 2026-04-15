@@ -5,6 +5,7 @@ import { isLibraryBrowserSession } from '@/lib/library-access';
 import { encodeCourseParam } from '@/lib/library-org';
 import { kindLabel, KIND_FILE_UPLOAD, KIND_TEXT_NOTE } from '@/lib/material-kinds';
 import { DeleteItemButton } from '@/components/delete-item-button';
+import { ItemMetadataEditor } from '@/components/item-metadata-editor';
 
 type Props = { params: Promise<{ id: string }> };
 
@@ -47,6 +48,12 @@ export default async function LibraryItemPage({ params }: Props) {
         )}
       </div>
       <h1 className="mt-3 text-2xl font-semibold text-slate-800">{item.title}</h1>
+
+      <ItemMetadataEditor
+        itemId={item.id}
+        initialTopic={item.topic}
+        initialCourseLabel={item.courseLabel}
+      />
 
       {item.kind === KIND_FILE_UPLOAD && item.storedFileName && (
         <section className="mt-6 rounded-xl border border-stone-200/80 bg-sky-50/40 p-4">

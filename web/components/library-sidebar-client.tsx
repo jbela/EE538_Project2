@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useSearchParams } from 'next/navigation';
+import { ClassManageControls } from '@/components/class-manage-controls';
 import { decodeCourseParam, encodeCourseParam } from '@/lib/library-org';
 
 export type SidebarClass = { label: string | null; display: string; count: number };
@@ -59,14 +60,13 @@ export function LibrarySidebarClient({ total, classes }: Props) {
                   decodedCourse !== 'uncategorized' &&
                   (c.label || '').trim() === decodedCourse));
             return (
-              <Link
-                key={param + c.display}
-                href={`/library?course=${param}`}
-                className={navCls(!!active)}
-              >
-                <span className="line-clamp-2">{c.display}</span>
-                <span className="block text-[11px] font-normal text-slate-400">{c.count} items</span>
-              </Link>
+              <div key={param + c.display} className="flex items-start gap-0.5 pr-1">
+                <Link href={`/library?course=${param}`} className={`${navCls(!!active)} min-w-0 flex-1`}>
+                  <span className="line-clamp-2">{c.display}</span>
+                  <span className="block text-[11px] font-normal text-slate-400">{c.count} items</span>
+                </Link>
+                <ClassManageControls label={c.label} display={c.display} count={c.count} />
+              </div>
             );
           })
         )}
