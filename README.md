@@ -73,7 +73,19 @@ npm start
 
 Leave this running. The API listens on **`http://localhost:3000`**.
 
-**Optional — better summaries:** create `backend/.env` with `OPENAI_API_KEY=...` (and optionally `OPENAI_MODEL`). Without it, the backend uses a simple heuristic summarizer.
+**Optional — better summaries, chat, and Whisper transcription:**
+
+```bash
+cp .env.example .env       # macOS / Linux
+copy .env.example .env     # Windows
+```
+
+Edit `backend/.env` and paste your OpenAI key into `OPENAI_API_KEY`. Without it, the backend still runs — `/summarize-text` falls back to a heuristic summarizer, and `/chat` returns a 503. With a key, you get:
+
+- `gpt-5.2`-powered summarization (override with `OPENAI_MODEL=gpt-5.5` for better quality)
+- Real Whisper transcription of uploaded audio/video files
+- Timestamped `[t=SEC]` citations clickable from the extension popup
+- A working `/chat` endpoint (the extension's chat tab)
 
 ### 5. Load the Chrome extension
 
@@ -146,10 +158,10 @@ Load the extension as above. You do **not** need Postgres or `web/` for this pat
 
 ### Summarize backend (`:3000`)
 
-- `GET /health`
-- `POST /summarize-text`
-- `POST /jobs` — file upload job
-- `GET /jobs/:id`
+- `GET /health` — reports whether the LLM is enabled and which models are in use
+- `POST /summarize-text` — body: `{title?, url?, transcript?, pageText?, segments?}`; returns `{summary, timeline?, segmentCount?, model}`. When `segments` are provided, the summary contains `[t=SEC]` citations and a per-section `timeline`.
+- `POST /chat` — body: `{messages: [{role, content}], transcript?, segments?, title?}`; returns `{reply, model}`. Replies include `[t=SEC]` citations when segments are provided.
+- `POST /jobs` — multipart file upload. Runs Whisper (when key is set) → segment-aware summarization. `GET /jobs/:id` to poll; the final result includes `summary`, `timeline`, and `segments`.
 
 ### Web app (`:3001`)
 

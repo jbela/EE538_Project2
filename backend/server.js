@@ -3,52 +3,40 @@ import cors from 'cors';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
+import { createReadStream } from 'fs';
+import 'dotenv/config';
+import OpenAI from 'openai';
 
 const app = express();
 const port = 3000;
 const upload = multer({ dest: 'uploads/' });
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' })); // transcripts can be large
 
 const jobs = new Map();
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || '';
-const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+// gpt-5.2 is the current sweet spot for quality vs cost (Apr 2026).
+// You can override with OPENAI_MODEL=gpt-5.5 for higher quality, or
+// OPENAI_MODEL=gpt-4o-mini if you have older API access.
+const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-5.2';
+const WHISPER_MODEL = process.env.WHISPER_MODEL || 'whisper-1';
+
+const openai = OPENAI_API_KEY ? new OpenAI({ apiKey: OPENAI_API_KEY }) : null;
+
+// ---------- Health ----------
 
 app.get('/health', (_req, res) => {
-  res.json({ ok: true, llm: OPENAI_API_KEY ? 'openai-enabled' : 'heuristic-only' });
-});
-
-app.post('/jobs', upload.single('file'), (req, res) => {
-  const jobId = uuidv4();
-  const file = req.file || null;
-
-  jobs.set(jobId, {
-    status: 'queued',
-    createdAt: Date.now(),
-    input: {
-      filename: file?.originalname || null,
-      mimetype: file?.mimetype || null,
-      size: file?.size || null
-    }
+  res.json({
+    ok: true,
+    llm: openai ? 'openai-enabled' : 'heuristic-only',
+    chatModel: openai ? OPENAI_MODEL : null,
+    whisperModel: openai ? WHISPER_MODEL : null
   });
-
-  processUploadedMediaJob(jobId, file).catch((error) => {
-    jobs.set(jobId, {
-      status: 'failed',
-      error: error.message || 'job failed'
-    });
-  });
-
-  res.status(202).json({ jobId, filename: file?.originalname || null });
 });
 
-app.get('/jobs/:id', (req, res) => {
-  const job = jobs.get(req.params.id);
-  if (!job) return res.status(404).json({ error: 'Job not found' });
-  res.json(job);
-});
+// ---------- Heuristic fallback (unchanged from your original) ----------
 
 function splitSentences(text) {
   return String(text || '')
@@ -64,14 +52,10 @@ function tokenize(text) {
 
 function simpleSummarize(text) {
   const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!clean) {
-    return { summary: 'No extractable transcript/text found on page.' };
-  }
+  if (!clean) return { summary: 'No extractable transcript/text found on page.' };
 
   const sentences = splitSentences(clean);
-  if (!sentences.length) {
-    return { summary: clean.slice(0, 600) };
-  }
+  if (!sentences.length) return { summary: clean.slice(0, 600) };
 
   const stop = new Set([
     'the','a','an','and','or','to','of','in','on','for','is','are','was','were','be','been','being',
@@ -90,12 +74,9 @@ function simpleSummarize(text) {
     const words = tokenize(s).filter((w) => !stop.has(w));
     let score = 0;
     for (const w of words) score += freq.get(w) || 0;
-
-    // Light bias toward earlier sentences and medium length informative lines.
     const positionBoost = Math.max(0, 1.2 - idx * 0.08);
     const len = s.length;
     const lengthBoost = len >= 40 && len <= 220 ? 1.1 : 0.9;
-
     return { sentence: s, idx, score: score * positionBoost * lengthBoost };
   });
 
@@ -109,42 +90,93 @@ function simpleSummarize(text) {
   let summary = selected.join(' ');
   if (!summary) summary = sentences.slice(0, 3).join(' ');
   if (summary.length > 700) summary = summary.slice(0, 700);
-
   return { summary };
 }
 
-function chunkText(text, maxChars = 2800) {
-  const clean = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!clean) return [];
+// ---------- Segment helpers ----------
 
-  const sentences = clean.split(/(?<=[.!?])\s+/).filter(Boolean);
+/**
+ * A Segment is { text: string, startTime: number, endTime: number } — seconds.
+ *
+ * Segments come from three places:
+ *   1) The Chrome extension (video <track> cues, Zoom DOM).
+ *   2) Whisper transcription of an uploaded file.
+ *   3) Synthesized from a flat string (fallback) — startTime stays 0.
+ */
+
+function normalizeSegments(segments) {
+  if (!Array.isArray(segments)) return [];
+  return segments
+    .map((s) => ({
+      text: String(s.text || '').replace(/\s+/g, ' ').trim(),
+      startTime: Number.isFinite(s.startTime) ? Math.max(0, s.startTime) : 0,
+      endTime: Number.isFinite(s.endTime) ? s.endTime : 0
+    }))
+    .filter((s) => s.text);
+}
+
+function segmentsToTranscriptText(segments) {
+  return segments.map((s) => s.text).join(' ');
+}
+
+/**
+ * Format segments for a prompt so the model can reference them by start time.
+ * Example output:
+ *   [t=0] So today we'll talk about gradient descent...
+ *   [t=42] The key insight is that the loss surface...
+ */
+function segmentsToPromptBlock(segments) {
+  return segments
+    .map((s) => `[t=${Math.round(s.startTime)}] ${s.text}`)
+    .join('\n');
+}
+
+/**
+ * Group segments into chunks bounded by character count, preserving timestamps.
+ * Returns Array<{ text, startTime, endTime, segments }> where each chunk's
+ * start/end spans its first and last segment.
+ */
+function chunkSegments(segments, maxChars = 6000) {
   const chunks = [];
-  let current = '';
+  let buf = [];
+  let bufLen = 0;
 
-  for (const s of sentences) {
-    if ((current + ' ' + s).trim().length > maxChars) {
-      if (current.trim()) chunks.push(current.trim());
-      current = s;
-    } else {
-      current += (current ? ' ' : '') + s;
+  for (const seg of segments) {
+    const segLen = seg.text.length + 1;
+    if (bufLen + segLen > maxChars && buf.length) {
+      chunks.push({
+        text: buf.map((s) => s.text).join(' '),
+        startTime: buf[0].startTime,
+        endTime: buf[buf.length - 1].endTime || buf[buf.length - 1].startTime,
+        segments: buf
+      });
+      buf = [];
+      bufLen = 0;
     }
+    buf.push(seg);
+    bufLen += segLen;
   }
-
-  if (current.trim()) chunks.push(current.trim());
+  if (buf.length) {
+    chunks.push({
+      text: buf.map((s) => s.text).join(' '),
+      startTime: buf[0].startTime,
+      endTime: buf[buf.length - 1].endTime || buf[buf.length - 1].startTime,
+      segments: buf
+    });
+  }
   return chunks;
 }
+
+// ---------- OpenAI calls ----------
 
 async function openAISummarize(text, { title, url, mode = 'generic' } = {}) {
   const modeLine = mode === 'video'
     ? 'This content comes from a lecture video transcript. Keep timeline coherence when possible.'
     : 'This content comes from webpage extracted text.';
 
-  const prompt = [
-    'You are a lecture summarizer.',
-    'Return only concise plain text.',
+  const userContent = [
     modeLine,
-    'Focus on key ideas and actionable takeaways.',
-    '',
+    'Focus on key ideas and actionable takeaways. Return only concise plain text — no headings, no markdown.',
     title ? `Page title: ${title}` : '',
     url ? `Page URL: ${url}` : '',
     '',
@@ -152,157 +184,362 @@ async function openAISummarize(text, { title, url, mode = 'generic' } = {}) {
     text
   ].filter(Boolean).join('\n');
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${OPENAI_API_KEY}`,
-      'Content-Type': 'application/json'
-    },
-    body: JSON.stringify({
-      model: OPENAI_MODEL,
-      temperature: 0.2,
-      messages: [
-        { role: 'system', content: 'Summarize clearly and accurately.' },
-        { role: 'user', content: prompt }
-      ]
-    })
+  const response = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    temperature: 0.2,
+    messages: [
+      { role: 'system', content: 'You are a precise lecture summarizer. Summarize clearly and accurately.' },
+      { role: 'user', content: userContent }
+    ]
   });
 
-  if (!response.ok) {
-    const err = await response.text();
-    throw new Error(`OpenAI error ${response.status}: ${err}`);
-  }
-
-  const data = await response.json();
-  const summary = data?.choices?.[0]?.message?.content?.trim();
+  const summary = response.choices?.[0]?.message?.content?.trim();
   if (!summary) throw new Error('OpenAI returned empty summary.');
   return { summary };
 }
 
-async function summarizeLongText(text, meta = {}) {
-  const chunks = chunkText(text, 2800);
-  if (!chunks.length) {
-    return {
-      summary: 'No extractable transcript/text found on page.',
-      chunkCount: 0,
-      timeline: []
-    };
+/**
+ * Summarize a list of timestamped segments. Returns:
+ *   {
+ *     summary: string,                // overall summary with [t=SEC] citations
+ *     timeline: [{ section, startSec, endSec, summary }]
+ *   }
+ *
+ * The model is instructed to insert [t=SEC] markers anchored to real segment
+ * start times, which the frontend can render as clickable jump links.
+ */
+async function openAISummarizeSegments(segments, { title } = {}) {
+  if (!segments.length) {
+    return { summary: 'No transcript content to summarize.', timeline: [] };
   }
 
-  const timeline = [];
-  const partials = [];
+  const chunks = chunkSegments(segments, 6000);
 
+  // 1) Per-chunk summary with citations anchored to that chunk's segments.
+  const partials = [];
   for (let i = 0; i < chunks.length; i++) {
     const chunk = chunks[i];
-    let partial;
+    const promptBlock = segmentsToPromptBlock(chunk.segments);
 
-    if (OPENAI_API_KEY) {
-      partial = await openAISummarize(chunk, meta);
-    } else {
-      partial = simpleSummarize(chunk);
-    }
-
-    partials.push(partial.summary);
-    timeline.push({
-      section: i + 1,
-      startSec: i * 180,
-      endSec: (i + 1) * 180,
-      summary: partial.summary
+    const response = await openai.chat.completions.create({
+      model: OPENAI_MODEL,
+      temperature: 0.2,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'You are a precise lecture summarizer.',
+            'You will receive a chunk of transcript where each line is prefixed with a timestamp marker like [t=42] meaning "this line starts 42 seconds into the lecture".',
+            'Write a concise plain-text summary (3-5 sentences) of the key ideas.',
+            'After every major claim, insert a citation in the form [t=SECONDS] using the timestamp of the segment that supports it. Use only timestamps that actually appear in the input.',
+            'Do not output headings, bullets, or markdown.'
+          ].join(' ')
+        },
+        {
+          role: 'user',
+          content: [
+            title ? `Lecture: ${title}` : '',
+            `Chunk ${i + 1} of ${chunks.length}:`,
+            '',
+            promptBlock
+          ].filter(Boolean).join('\n')
+        }
+      ]
     });
+
+    const partial = response.choices?.[0]?.message?.content?.trim() || '';
+    partials.push(partial);
   }
 
-  const merged = partials.join('\n\n');
-  const final = OPENAI_API_KEY
-    ? await openAISummarize(merged, { ...meta, mode: 'video' })
-    : simpleSummarize(merged);
+  // 2) Final pass: merge the per-chunk summaries into one coherent summary,
+  //    keeping the most important [t=SEC] citations.
+  const mergePrompt = [
+    'Below are partial summaries of consecutive sections of one lecture, each containing [t=SEC] timestamp citations.',
+    'Produce one unified summary in 5-8 sentences that captures the lecture\'s key ideas in order.',
+    'Preserve the most important [t=SEC] citations so a reader can jump to the source moment. Use only timestamps that appear in the input.',
+    'Plain text only — no headings, no markdown, no bullets.',
+    '',
+    partials.map((p, i) => `Section ${i + 1}:\n${p}`).join('\n\n')
+  ].join('\n');
 
-  return {
-    summary: final.summary,
-    chunkCount: chunks.length,
-    timeline
-  };
+  const finalResp = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    temperature: 0.2,
+    messages: [
+      { role: 'system', content: 'You merge partial lecture summaries into one coherent overview while preserving timestamp citations.' },
+      { role: 'user', content: mergePrompt }
+    ]
+  });
+
+  const finalSummary = finalResp.choices?.[0]?.message?.content?.trim() || partials.join('\n\n');
+
+  const timeline = chunks.map((c, i) => ({
+    section: i + 1,
+    startSec: Math.round(c.startTime),
+    endSec: Math.round(c.endTime),
+    summary: partials[i] || ''
+  }));
+
+  return { summary: finalSummary, timeline };
+}
+
+/**
+ * Chat over a transcript. Uses segments-with-timestamps when available so the
+ * model can cite [t=SEC] in its answers.
+ *
+ * For lectures up to ~50K tokens this fits comfortably in gpt-5.2's 1M-token
+ * context window. For larger corpora, swap this for embeddings + retrieval.
+ */
+async function openAIChat({ messages, segments, transcriptText, title }) {
+  const transcriptForPrompt = segments.length
+    ? segmentsToPromptBlock(segments)
+    : transcriptText;
+
+  const systemContent = [
+    'You are a study assistant for a single lecture.',
+    'Answer the user\'s questions using ONLY the provided lecture transcript.',
+    'If the transcript does not contain the answer, say so honestly — do not invent material.',
+    segments.length
+      ? 'The transcript is a list of lines, each prefixed with [t=SECONDS] indicating when that line was spoken in the lecture. After each factual claim in your answer, append a citation like [t=SECONDS] using the timestamp of the segment that supports it. Use only timestamps that appear in the transcript.'
+      : 'No timestamps are available, so do not invent any.',
+    'Keep answers concise — 1 to 4 short paragraphs. Plain text only, no markdown headings or bullets.',
+    title ? `Lecture title: ${title}` : '',
+    '',
+    'TRANSCRIPT:',
+    transcriptForPrompt
+  ].filter(Boolean).join('\n');
+
+  const safeMessages = (Array.isArray(messages) ? messages : [])
+    .filter((m) => m && (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
+    .slice(-12); // cap conversation history
+
+  const response = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    temperature: 0.3,
+    messages: [
+      { role: 'system', content: systemContent },
+      ...safeMessages
+    ]
+  });
+
+  const reply = response.choices?.[0]?.message?.content?.trim() || '';
+  return { reply, model: OPENAI_MODEL };
+}
+
+// ---------- Endpoints: summarize ----------
+
+app.post('/summarize-text', async (req, res) => {
+  try {
+    const { title, url, transcript, pageText, segments } = req.body || {};
+    const normSegs = normalizeSegments(segments);
+    const sourceText = String(transcript || pageText || '').trim();
+
+    // Path A: caller provided real timestamped segments → cited summary + timeline.
+    if (normSegs.length && openai) {
+      const result = await openAISummarizeSegments(normSegs, { title });
+      return res.json({
+        title: title || null,
+        url: url || null,
+        summary: result.summary,
+        timeline: result.timeline,
+        segmentCount: normSegs.length,
+        model: OPENAI_MODEL
+      });
+    }
+
+    // Path B: flat text only (or no LLM key) → original behavior.
+    if (!sourceText && !normSegs.length) {
+      return res.json({
+        title: title || null,
+        url: url || null,
+        summary: 'No extractable transcript/text found on page.',
+        model: openai ? OPENAI_MODEL : 'heuristic-fallback'
+      });
+    }
+
+    const flatText = sourceText || segmentsToTranscriptText(normSegs);
+    const result = openai
+      ? await openAISummarize(flatText, { title, url, mode: 'generic' })
+      : simpleSummarize(flatText);
+
+    res.json({
+      title: title || null,
+      url: url || null,
+      summary: result.summary,
+      model: openai ? OPENAI_MODEL : 'heuristic-fallback'
+    });
+  } catch (error) {
+    console.error('[/summarize-text]', error);
+    res.status(500).json({ error: error.message || 'summarization failed' });
+  }
+});
+
+// ---------- Endpoints: chat ----------
+
+app.post('/chat', async (req, res) => {
+  try {
+    if (!openai) {
+      return res.status(503).json({
+        error: 'Chat requires OPENAI_API_KEY. Set it in backend/.env and restart the server.'
+      });
+    }
+
+    const { messages, transcript, segments, title } = req.body || {};
+    const normSegs = normalizeSegments(segments);
+    const transcriptText = String(transcript || '').trim();
+
+    if (!normSegs.length && !transcriptText) {
+      return res.status(400).json({
+        error: 'Provide a transcript or segments[] so the assistant has context.'
+      });
+    }
+
+    if (!Array.isArray(messages) || !messages.length) {
+      return res.status(400).json({ error: 'messages[] is required.' });
+    }
+
+    const result = await openAIChat({
+      messages,
+      segments: normSegs,
+      transcriptText,
+      title
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error('[/chat]', error);
+    res.status(500).json({ error: error.message || 'chat failed' });
+  }
+});
+
+// ---------- Endpoints: file upload + Whisper ----------
+
+app.post('/jobs', upload.single('file'), (req, res) => {
+  const jobId = uuidv4();
+  const file = req.file || null;
+
+  jobs.set(jobId, {
+    status: 'queued',
+    createdAt: Date.now(),
+    input: {
+      filename: file?.originalname || null,
+      mimetype: file?.mimetype || null,
+      size: file?.size || null
+    }
+  });
+
+  processUploadedMediaJob(jobId, file).catch((error) => {
+    console.error('[/jobs]', error);
+    jobs.set(jobId, {
+      status: 'failed',
+      error: error.message || 'job failed'
+    });
+  });
+
+  res.status(202).json({ jobId, filename: file?.originalname || null });
+});
+
+app.get('/jobs/:id', (req, res) => {
+  const job = jobs.get(req.params.id);
+  if (!job) return res.status(404).json({ error: 'Job not found' });
+  res.json(job);
+});
+
+/**
+ * Real Whisper transcription. Returns segments with start/end times.
+ * Whisper accepts most audio/video formats directly up to 25MB. For larger
+ * files, you'd add an ffmpeg pre-step to extract + compress audio.
+ */
+async function whisperTranscribe(file) {
+  const stream = createReadStream(file.path);
+
+  // verbose_json gives us per-segment timestamps, which we use for citations.
+  const resp = await openai.audio.transcriptions.create({
+    file: stream,
+    model: WHISPER_MODEL,
+    response_format: 'verbose_json',
+    timestamp_granularities: ['segment']
+  });
+
+  const segments = (resp.segments || []).map((s) => ({
+    text: String(s.text || '').trim(),
+    startTime: Number(s.start) || 0,
+    endTime: Number(s.end) || 0
+  })).filter((s) => s.text);
+
+  return { segments, language: resp.language || 'unknown' };
 }
 
 async function transcribeUploadedMediaStub(file) {
-  // Phase-1 skeleton: no real ASR yet.
-  // Future: replace this with ffmpeg audio extraction + Whisper transcription.
   const filename = file?.originalname || 'uploaded media';
   return [
     `Transcript stub for ${filename}.`,
     'This placeholder transcript represents what an ASR engine would output.',
-    'In production, this step will extract audio from video and run speech-to-text.',
-    'Then chunked summarization will build an overall summary and timeline highlights.'
+    'Set OPENAI_API_KEY in backend/.env to enable real Whisper transcription.'
   ].join(' ');
 }
 
 async function processUploadedMediaJob(jobId, file) {
   jobs.set(jobId, { status: 'processing', stage: 'transcribing' });
 
-  if (!file) {
-    throw new Error('No uploaded file found in request.');
-  }
+  if (!file) throw new Error('No uploaded file found in request.');
 
-  const transcript = await transcribeUploadedMediaStub(file);
+  let segments = [];
+  let transcriptText = '';
+  let asrEngine = 'stub';
+
+  if (openai) {
+    try {
+      const { segments: whisperSegs } = await whisperTranscribe(file);
+      segments = whisperSegs;
+      transcriptText = segmentsToTranscriptText(segments);
+      asrEngine = WHISPER_MODEL;
+    } catch (e) {
+      console.error('[whisper] failed, falling back to stub:', e.message);
+      transcriptText = await transcribeUploadedMediaStub(file);
+    }
+  } else {
+    transcriptText = await transcribeUploadedMediaStub(file);
+  }
 
   jobs.set(jobId, { status: 'processing', stage: 'summarizing' });
 
-  const summarized = await summarizeLongText(transcript, {
-    title: file.originalname,
-    mode: 'video'
-  });
+  let summary;
+  let timeline = [];
+
+  if (openai && segments.length) {
+    const result = await openAISummarizeSegments(segments, { title: file.originalname });
+    summary = result.summary;
+    timeline = result.timeline;
+  } else if (openai) {
+    const result = await openAISummarize(transcriptText, { title: file.originalname, mode: 'video' });
+    summary = result.summary;
+  } else {
+    summary = simpleSummarize(transcriptText).summary;
+  }
 
   jobs.set(jobId, {
     status: 'done',
     result: {
-      summary: summarized.summary,
-      timeline: summarized.timeline,
+      summary,
+      timeline,
+      segments, // frontend can use these for chat / citations
       meta: {
         filename: file.originalname,
         mimetype: file.mimetype,
         size: file.size,
-        chunkCount: summarized.chunkCount,
-        model: OPENAI_API_KEY ? OPENAI_MODEL : 'heuristic-fallback',
-        pipeline: 'phase1-video-skeleton'
+        segmentCount: segments.length,
+        asrEngine,
+        model: openai ? OPENAI_MODEL : 'heuristic-fallback',
+        pipeline: openai && segments.length ? 'whisper+chat-completions' : 'phase1-fallback'
       }
     }
   });
 
-  // cleanup temp upload file
-  try {
-    await fs.unlink(file.path);
-  } catch (_) {
-    // ignore cleanup errors
-  }
+  try { await fs.unlink(file.path); } catch (_) {}
 }
 
-app.post('/summarize-text', async (req, res) => {
-  try {
-    const { title, url, transcript, pageText } = req.body || {};
-    const sourceText = String(transcript || pageText || '').trim();
-
-    if (!sourceText) {
-      return res.json({
-        title: title || null,
-        url: url || null,
-        summary: 'No extractable transcript/text found on page.',
-        model: OPENAI_API_KEY ? OPENAI_MODEL : 'heuristic-fallback'
-      });
-    }
-
-    const result = OPENAI_API_KEY
-      ? await openAISummarize(sourceText, { title, url, mode: 'generic' })
-      : simpleSummarize(sourceText);
-
-    res.json({
-      title: title || null,
-      url: url || null,
-      summary: result.summary,
-      model: OPENAI_API_KEY ? OPENAI_MODEL : 'heuristic-fallback'
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message || 'summarization failed' });
-  }
-});
+// ---------- Misc ----------
 
 app.get('/search', (req, res) => {
   const q = req.query.q || '';
@@ -311,5 +548,7 @@ app.get('/search', (req, res) => {
 
 app.listen(port, () => {
   console.log(`Backend listening on http://localhost:${port}`);
-  console.log(OPENAI_API_KEY ? `LLM enabled: ${OPENAI_MODEL}` : 'LLM disabled: using heuristic fallback');
+  console.log(openai
+    ? `LLM enabled — chat: ${OPENAI_MODEL}, ASR: ${WHISPER_MODEL}`
+    : 'LLM disabled — set OPENAI_API_KEY in backend/.env to enable.');
 });

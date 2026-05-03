@@ -9,8 +9,17 @@ const DEMO_LIBRARY_KEY = 'ee538-local-demo-library-key';
 
 const $ = (id) => document.getElementById(id);
 
-/** Last summarized source (page or file) for export metadata. */
-let lastSourceMeta = { title: '', url: '', transcript: '' };
+/** Last summarized source — used for export and as context for chat. */
+let lastSourceMeta = {
+  title: '',
+  url: '',
+  transcript: '',
+  segments: [], // [{text, startTime, endTime}]
+  tabId: null    // remembered so citations can drive the source video
+};
+
+/** Running chat history sent to /chat each turn. */
+let chatHistory = []; // [{role: 'user'|'assistant', content: string}]
 
 function setStatus(text) {
   $('status').textContent = text;
@@ -31,6 +40,8 @@ async function ensureContentScript(tabId) {
     });
   }
 }
+
+// ---------- Backend calls ----------
 
 async function submitJob(file) {
   const form = new FormData();
@@ -56,6 +67,102 @@ async function summarizeText(payload) {
   return res.json();
 }
 
+async function callChat(messages) {
+  const res = await fetch(`${API_BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messages,
+      title: lastSourceMeta.title || undefined,
+      transcript: lastSourceMeta.transcript || undefined,
+      segments: lastSourceMeta.segments?.length ? lastSourceMeta.segments : undefined
+    })
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `Chat failed: ${res.status}`);
+  }
+  return res.json();
+}
+
+// ---------- Citation rendering ----------
+
+function formatSeconds(sec) {
+  const s = Math.max(0, Math.round(Number(sec) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  const pad = (n) => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(ss)}` : `${m}:${pad(ss)}`;
+}
+
+/**
+ * Click handler for a [t=SEC] citation. Tries to seek the source tab's video
+ * to that timestamp; if that's not feasible (cross-origin video, no <video>
+ * element, source tab closed), opens the source URL with ?t=SEC appended.
+ */
+async function jumpToTimestamp(seconds) {
+  const sec = Math.max(0, Math.round(Number(seconds) || 0));
+
+  if (lastSourceMeta.tabId) {
+    try {
+      const tab = await chrome.tabs.get(lastSourceMeta.tabId);
+      if (tab) {
+        await chrome.tabs.update(tab.id, { active: true });
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          func: (t) => {
+            const v = document.querySelector('video');
+            if (v) {
+              try { v.currentTime = t; v.play?.(); } catch (_) {}
+            }
+          },
+          args: [sec]
+        });
+        return;
+      }
+    } catch (_) {
+      // Tab gone — fall through to URL-based jump.
+    }
+  }
+
+  if (lastSourceMeta.url) {
+    const sep = lastSourceMeta.url.includes('?') ? '&' : '?';
+    const url = `${lastSourceMeta.url}${sep}t=${sec}s`;
+    chrome.tabs.create({ url });
+  }
+}
+
+/**
+ * Render text containing [t=SEC] markers into a DOM fragment with clickable
+ * citation chips. Other text is preserved as plain text.
+ */
+function renderTextWithCitations(text, container) {
+  container.replaceChildren();
+
+  const parts = String(text || '').split(/(\[t=\d+(?:\.\d+)?\])/g);
+  for (const part of parts) {
+    const m = part.match(/^\[t=(\d+(?:\.\d+)?)\]$/);
+    if (m) {
+      const sec = Number(m[1]);
+      const link = document.createElement('a');
+      link.href = '#';
+      link.className = 'citation';
+      link.textContent = formatSeconds(sec);
+      link.title = `Jump to ${formatSeconds(sec)}`;
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        jumpToTimestamp(sec);
+      });
+      container.appendChild(link);
+    } else if (part) {
+      container.appendChild(document.createTextNode(part));
+    }
+  }
+}
+
+// ---------- Page summary flow ----------
+
 async function runFileSummary() {
   const fileInput = $('file');
   if (!fileInput.files.length) {
@@ -65,20 +172,38 @@ async function runFileSummary() {
 
   const file = fileInput.files[0];
   $('result').value = '';
+  renderTextWithCitations('', $('resultRich'));
   setStatus('Submitting file...');
 
   const { jobId } = await submitJob(file);
 
-  for (let i = 0; i < 20; i++) {
-    await new Promise((r) => setTimeout(r, 1000));
+  // Whisper jobs can take a while — extend the polling window.
+  for (let i = 0; i < 120; i++) {
+    await new Promise((r) => setTimeout(r, 1500));
     const job = await getJob(jobId);
 
     if (job.status === 'done') {
       const summary = job?.result?.summary || 'No summary returned.';
-      $('result').value = summary;
+      const segments = job?.result?.segments || [];
       const fn = job?.input?.filename || file.name;
-      lastSourceMeta = { title: fn || 'Uploaded media', url: '', transcript: '' };
-      setStatus('Done.');
+
+      $('result').value = summary;
+      renderTextWithCitations(summary, $('resultRich'));
+
+      lastSourceMeta = {
+        title: fn || 'Uploaded media',
+        url: '',
+        transcript: segments.map((s) => s.text).join(' '),
+        segments,
+        tabId: null
+      };
+      chatHistory = [];
+      $('chatBox').replaceChildren();
+
+      const segCount = segments.length;
+      setStatus(segCount
+        ? `Done. ${segCount} timestamped segments — ask the chat anything.`
+        : 'Done.');
       return;
     }
 
@@ -86,7 +211,7 @@ async function runFileSummary() {
       throw new Error(job.error || 'Job failed.');
     }
 
-    setStatus(`Processing... (${job.status})`);
+    setStatus(`Processing... (${job.stage || job.status})`);
   }
 
   throw new Error('Timed out while waiting for job result.');
@@ -95,7 +220,6 @@ async function runFileSummary() {
 async function runPageSummary() {
   const tab = await getActiveTab();
   if (!tab?.id) throw new Error('No active tab found.');
-
   if (!tab.url || !/^https?:/i.test(tab.url)) {
     throw new Error('Open a regular http/https page first.');
   }
@@ -104,38 +228,53 @@ async function runPageSummary() {
   await ensureContentScript(tab.id);
   const response = await chrome.tabs.sendMessage(tab.id, { type: 'extract_content' });
 
-  if (!response?.ok) {
-    throw new Error(response?.error || 'Extraction failed.');
-  }
+  if (!response?.ok) throw new Error(response?.error || 'Extraction failed.');
+  const d = response.data || {};
 
   setStatus('Summarizing...');
-  const d = response.data || {};
   const summarized = await summarizeText({
     title: d.title,
     url: d.url,
     transcript: d.transcriptCandidate,
-    pageText: d.pageText
+    pageText: d.pageText,
+    segments: d.segments
   });
 
-  $('result').value = summarized?.summary || 'No summary returned.';
+  const summary = summarized?.summary || 'No summary returned.';
+  $('result').value = summary;
+  renderTextWithCitations(summary, $('resultRich'));
+
   lastSourceMeta = {
     title: (d.title || d.h1 || 'Web page').trim() || 'Web page',
     url: d.url || '',
     transcript: d.transcriptCandidate || '',
+    segments: Array.isArray(d.segments) ? d.segments : [],
+    tabId: tab.id
   };
-  setStatus('Done.');
+  chatHistory = [];
+  $('chatBox').replaceChildren();
+
+  const segCount = lastSourceMeta.segments.length;
+  setStatus(segCount
+    ? `Done. Source: ${d.segmentSource || 'unknown'} (${segCount} segments).`
+    : 'Done.');
 }
 
 function clearOutput() {
   $('result').value = '';
-  lastSourceMeta = { title: '', url: '', transcript: '' };
+  renderTextWithCitations('', $('resultRich'));
+  lastSourceMeta = { title: '', url: '', transcript: '', segments: [], tabId: null };
+  chatHistory = [];
+  $('chatBox').replaceChildren();
   setStatus('Idle. Waiting for your action.');
 }
+
+// ---------- Library export ----------
 
 async function loadLibrarySettings() {
   const { libraryBaseUrl, libraryToken } = await chrome.storage.local.get([
     'libraryBaseUrl',
-    'libraryToken',
+    'libraryToken'
   ]);
   $('libraryBaseUrl').value = libraryBaseUrl || DEMO_LIBRARY_BASE;
   $('libraryToken').value = libraryToken || DEMO_LIBRARY_KEY;
@@ -172,16 +311,16 @@ async function exportToLibrary() {
     ...(lastSourceMeta.transcript ? { transcript: lastSourceMeta.transcript } : {}),
     ...(lastSourceMeta.url ? { sourceUrl: lastSourceMeta.url } : {}),
     ...(courseLabel ? { courseLabel } : {}),
-    ...(topic ? { topic } : {}),
+    ...(topic ? { topic } : {})
   };
 
   const res = await fetch(`${base}/api/items`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${token}`
     },
-    body: JSON.stringify(body),
+    body: JSON.stringify(body)
   });
 
   if (!res.ok) {
@@ -192,55 +331,70 @@ async function exportToLibrary() {
   setStatus(`Exported: ${title}`);
 }
 
+// ---------- Chat ----------
+
 function appendChatMessage(role, text) {
   const box = $('chatBox');
   const msg = document.createElement('div');
   msg.className = `chat-msg ${role}`;
-  msg.textContent = text;
+  // Render assistant replies with clickable [t=SEC] citations.
+  if (role === 'assistant') {
+    renderTextWithCitations(text, msg);
+  } else {
+    msg.textContent = text;
+  }
   box.appendChild(msg);
   box.scrollTop = box.scrollHeight;
 }
 
-function handleChatSend() {
+async function handleChatSend() {
   const input = $('chatInput');
   const text = (input.value || '').trim();
   if (!text) return;
 
+  if (!lastSourceMeta.transcript && !lastSourceMeta.segments?.length) {
+    appendChatMessage('assistant', 'Summarize a page or upload a file first so I have context.');
+    return;
+  }
+
   appendChatMessage('user', text);
   input.value = '';
+  chatHistory.push({ role: 'user', content: text });
 
-  const placeholderReply = $('result').value
-    ? 'No LLM connected yet.'
-    : 'No LLM: summarize first.';
+  // Optimistic placeholder while we wait.
+  const box = $('chatBox');
+  const thinking = document.createElement('div');
+  thinking.className = 'chat-msg assistant thinking';
+  thinking.textContent = 'Thinking...';
+  box.appendChild(thinking);
+  box.scrollTop = box.scrollHeight;
 
-  setTimeout(() => {
-    appendChatMessage('assistant', placeholderReply);
-  }, 250);
+  try {
+    const { reply } = await callChat(chatHistory);
+    thinking.remove();
+    appendChatMessage('assistant', reply || '(empty reply)');
+    chatHistory.push({ role: 'assistant', content: reply || '' });
+  } catch (err) {
+    thinking.remove();
+    appendChatMessage('assistant', `Error: ${err.message}`);
+  }
 }
+
+// ---------- Wire up ----------
 
 $('file').addEventListener('change', () => {
   const f = $('file').files?.[0];
-  const name = f ? f.name : 'No file selected';
-  $('fileName').textContent = name;
+  $('fileName').textContent = f ? f.name : 'No file selected';
 });
 
 $('uploadBtn').addEventListener('click', async () => {
-  try {
-    await runFileSummary();
-  } catch (err) {
-    setStatus('Error.');
-    $('result').value = err.message;
-  }
+  try { await runFileSummary(); }
+  catch (err) { setStatus('Error.'); $('result').value = err.message; }
 });
 
 $('extractBtn').addEventListener('click', async () => {
-  try {
-    $('result').value = '';
-    await runPageSummary();
-  } catch (err) {
-    setStatus('Error.');
-    $('result').value = err.message;
-  }
+  try { $('result').value = ''; await runPageSummary(); }
+  catch (err) { setStatus('Error.'); $('result').value = err.message; }
 });
 
 $('clearBtn').addEventListener('click', clearOutput);
@@ -248,23 +402,19 @@ $('clearBtn').addEventListener('click', clearOutput);
 loadLibrarySettings().catch(() => {});
 
 $('saveLibraryBtn').addEventListener('click', async () => {
-  try {
-    await saveLibrarySettings();
-  } catch (err) {
-    setStatus('Error saving settings.');
-    $('result').value = err.message;
-  }
+  try { await saveLibrarySettings(); }
+  catch (err) { setStatus('Error saving settings.'); $('result').value = err.message; }
 });
 
 $('exportLibraryBtn').addEventListener('click', async () => {
-  try {
-    await exportToLibrary();
-  } catch (err) {
-    setStatus('Export failed.');
-    $('result').value = err.message;
-  }
+  try { await exportToLibrary(); }
+  catch (err) { setStatus('Export failed.'); $('result').value = err.message; }
 });
+
 $('chatSendBtn').addEventListener('click', handleChatSend);
 $('chatInput').addEventListener('keydown', (e) => {
-  if (e.key === 'Enter') handleChatSend();
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    handleChatSend();
+  }
 });

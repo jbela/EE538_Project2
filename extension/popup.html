@@ -226,6 +226,48 @@
         border-color: transparent;
         padding: 9px 12px;
       }
+
+      .citation {
+        display: inline-block;
+        margin: 0 2px;
+        padding: 1px 6px;
+        font-size: 11px;
+        font-weight: 600;
+        background: #dbeafe;
+        color: #1d4ed8;
+        border-radius: 999px;
+        text-decoration: none;
+        cursor: pointer;
+        border: 1px solid #bfdbfe;
+        line-height: 1.4;
+        vertical-align: baseline;
+      }
+
+      .citation:hover {
+        background: #bfdbfe;
+      }
+
+      .result-rich {
+        font-size: 12.5px;
+        line-height: 1.5;
+        color: #111827;
+        white-space: pre-wrap;
+        margin-top: 8px;
+        padding: 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: #fafbff;
+        min-height: 60px;
+      }
+
+      .result-rich:empty {
+        display: none;
+      }
+
+      .chat-msg.thinking {
+        opacity: 0.6;
+        font-style: italic;
+      }
     </style>
   </head>
   <body>
@@ -264,6 +306,8 @@
         <div class="card">
           <h2>Summary Output</h2>
           <textarea id="result" placeholder="Your summary will appear here..."></textarea>
+          <div id="resultRich" class="result-rich" aria-live="polite"></div>
+          <div class="hint">Blue chips like <span class="citation">2:14</span> are clickable — they jump the source video (or open the source URL at that timestamp).</div>
         </div>
 
         <div class="card">
@@ -316,9 +360,9 @@
         </div>
 
         <div class="card" style="margin-bottom:0">
-          <h2>AI Material Chat (UI Prototype)</h2>
+          <h2>AI Material Chat</h2>
           <div id="chatBox" class="chat-box">
-            <div class="chat-msg assistant">Hi! Ask me about the material. (UI only for now)</div>
+            <div class="chat-msg assistant">Summarize a page or upload a file, then ask me anything about it. Answers include clickable timestamps when available.</div>
           </div>
           <div class="chat-input-row">
             <input id="chatInput" type="text" placeholder="Ask about the lecture material..." />
