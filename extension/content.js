@@ -85,7 +85,7 @@ function getVideoInfo() {
  *
  * Returns { lines: string[], segments: [{text, startTime}] }
  */
-function extractZoomLikeTranscript(maxLines = 300) {
+function extractZoomLikeTranscript(maxLines = 2000) {
   const selectors = [
     '[data-testid*="transcript"] *',
     '[class*="transcript"] *',
@@ -152,7 +152,7 @@ function syntheticSegmentsFromBodyText(text, wordsPerSecond = 2.5) {
   return segs;
 }
 
-function extractPageText(maxChars = 12000) {
+function extractPageText(maxChars = 80000) {
   const title = document.title || '';
   const url = location.href;
   const h1 = document.querySelector('h1')?.innerText?.trim() || '';
