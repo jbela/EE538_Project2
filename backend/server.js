@@ -3,7 +3,6 @@ import cors from 'cors';
 import multer from 'multer';
 import { v4 as uuidv4 } from 'uuid';
 import fs from 'fs/promises';
-import { createReadStream } from 'fs';
 import 'dotenv/config';
 import OpenAI from 'openai';
 
@@ -451,11 +450,19 @@ app.get('/jobs/:id', (req, res) => {
  * files, you'd add an ffmpeg pre-step to extract + compress audio.
  */
 async function whisperTranscribe(file) {
-  const stream = createReadStream(file.path);
+  // Multer stores temp files without the original extension (e.g. uploads/abc123),
+  // and Whisper file-type detection can fail for extensionless streams.
+  // Wrap bytes in a File carrying the original filename + mimetype.
+  const bytes = await fs.readFile(file.path);
+  const uploadFile = new File(
+    [bytes],
+    file.originalname || 'upload.mp4',
+    { type: file.mimetype || 'application/octet-stream' }
+  );
 
   // verbose_json gives us per-segment timestamps, which we use for citations.
   const resp = await openai.audio.transcriptions.create({
-    file: stream,
+    file: uploadFile,
     model: WHISPER_MODEL,
     response_format: 'verbose_json',
     timestamp_granularities: ['segment']
