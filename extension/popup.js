@@ -21,6 +21,10 @@ let lastSourceMeta = {
 /** Running chat history sent to /chat each turn. */
 let chatHistory = []; // [{role: 'user'|'assistant', content: string}]
 
+/** GET /api/library/taxonomy — course pickers in Export section */
+let taxonomyCourses = [];
+let taxonomyTopicsByCourse = {};
+
 function setStatus(text) {
   $('status').textContent = text;
 }
@@ -285,6 +289,75 @@ async function saveLibrarySettings() {
   const libraryToken = ($('libraryToken').value || '').trim() || DEMO_LIBRARY_KEY;
   await chrome.storage.local.set({ libraryBaseUrl, libraryToken });
   setStatus('Library settings saved.');
+  await refreshTaxonomy();
+}
+
+function populateCourseSelect() {
+  const sel = $('courseSelect');
+  const previous = sel.value;
+  sel.innerHTML = '<option value="">— Pick an existing class —</option>';
+  for (const c of taxonomyCourses) {
+    const opt = document.createElement('option');
+    opt.value = c;
+    opt.textContent = c;
+    sel.appendChild(opt);
+  }
+  const typed = ($('courseLabel').value || '').trim();
+  if (previous && taxonomyCourses.includes(previous)) {
+    sel.value = previous;
+  } else if (typed && taxonomyCourses.includes(typed)) {
+    sel.value = typed;
+  }
+}
+
+function syncTopicSelectForCourse() {
+  const c = ($('courseLabel').value || '').trim();
+  const topics = (c && taxonomyTopicsByCourse[c]) || [];
+  const sel = $('topicSelect');
+  const previous = sel.value;
+  sel.innerHTML = '<option value="">— Pick an existing topic —</option>';
+  for (const t of topics) {
+    const opt = document.createElement('option');
+    opt.value = t;
+    opt.textContent = t;
+    sel.appendChild(opt);
+  }
+  const typedTopic = ($('topic').value || '').trim();
+  if (previous && topics.includes(previous)) {
+    sel.value = previous;
+  } else if (typedTopic && topics.includes(typedTopic)) {
+    sel.value = typedTopic;
+  }
+}
+
+async function refreshTaxonomy(options = {}) {
+  const silent = options.silent === true;
+  const token = ($('libraryToken').value || '').trim() || DEMO_LIBRARY_KEY;
+  let base = ($('libraryBaseUrl').value || '').trim() || DEMO_LIBRARY_BASE;
+  base = base.replace(/\/$/, '');
+  try {
+    const res = await fetch(`${base}/api/library/taxonomy`, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || `HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    taxonomyCourses = Array.isArray(data.courses) ? data.courses : [];
+    taxonomyTopicsByCourse =
+      data.topicsByCourse && typeof data.topicsByCourse === 'object' ? data.topicsByCourse : {};
+    populateCourseSelect();
+    syncTopicSelectForCourse();
+    if (!silent) setStatus('Class and topic lists loaded from library.');
+  } catch (e) {
+    taxonomyCourses = [];
+    taxonomyTopicsByCourse = {};
+    populateCourseSelect();
+    syncTopicSelectForCourse();
+    const msg = e instanceof Error ? e.message : String(e);
+    setStatus(`Could not load class lists: ${msg}`);
+  }
 }
 
 async function exportToLibrary() {
@@ -399,7 +472,55 @@ $('extractBtn').addEventListener('click', async () => {
 
 $('clearBtn').addEventListener('click', clearOutput);
 
-loadLibrarySettings().catch(() => {});
+loadLibrarySettings()
+  .then(() => refreshTaxonomy({ silent: true }))
+  .catch(() => {});
+
+$('courseSelect').addEventListener('change', () => {
+  const v = $('courseSelect').value;
+  if (v) $('courseLabel').value = v;
+  syncTopicSelectForCourse();
+});
+
+$('courseLabel').addEventListener('input', () => {
+  const typed = ($('courseLabel').value || '').trim();
+  const sel = $('courseSelect');
+  if (!typed) {
+    sel.value = '';
+  } else if (taxonomyCourses.includes(typed)) {
+    sel.value = typed;
+  } else {
+    sel.value = '';
+  }
+  syncTopicSelectForCourse();
+});
+
+$('topicSelect').addEventListener('change', () => {
+  const v = $('topicSelect').value;
+  if (v) $('topic').value = v;
+});
+
+$('topic').addEventListener('input', () => {
+  const typed = ($('topic').value || '').trim();
+  const c = ($('courseLabel').value || '').trim();
+  const topics = (c && taxonomyTopicsByCourse[c]) || [];
+  const sel = $('topicSelect');
+  if (!typed) {
+    sel.value = '';
+  } else if (topics.includes(typed)) {
+    sel.value = typed;
+  } else {
+    sel.value = '';
+  }
+});
+
+$('refreshTaxonomyBtn').addEventListener('click', async () => {
+  try {
+    await refreshTaxonomy();
+  } catch (err) {
+    setStatus(err instanceof Error ? err.message : 'Refresh failed.');
+  }
+});
 
 $('saveLibraryBtn').addEventListener('click', async () => {
   try { await saveLibrarySettings(); }

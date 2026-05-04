@@ -147,6 +147,40 @@
         background: #f9fafb;
       }
 
+      select.field {
+        width: 100%;
+        margin-top: 4px;
+        padding: 8px 10px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        font-size: 12px;
+        background: #fff;
+        color: #111827;
+      }
+
+      .field-label {
+        display: block;
+        margin-top: 8px;
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--text);
+      }
+
+      .field-hint {
+        display: block;
+        margin-top: 2px;
+        font-size: 11px;
+        color: var(--muted);
+        line-height: 1.3;
+      }
+
+      #refreshTaxonomyBtn {
+        background: #f3f4f6;
+        color: #374151;
+        margin-top: 8px;
+        width: 100%;
+      }
+
       #status {
         font-size: 12px;
         color: var(--success-text);
@@ -335,24 +369,35 @@
             autocomplete="off"
             style="width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px"
           />
-          <label class="hint" for="courseLabel" style="display: block; margin-top: 8px; font-weight: 600; color: var(--text)"
-            >Course (optional)</label
-          >
+          <span class="field-label" style="margin-top: 10px">Class</span>
+          <span class="field-hint">Pick a class already in your library, or type a new one below.</span>
+          <label class="field-label" for="courseSelect">From library</label>
+          <select id="courseSelect" class="field" aria-label="Pick existing class">
+            <option value="">— Pick an existing class —</option>
+          </select>
+          <label class="field-label" for="courseLabel">Manual (or confirms pick above)</label>
           <input
             id="courseLabel"
             type="text"
             placeholder="e.g. EE538"
             style="width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px"
           />
-          <label class="hint" for="topic" style="display: block; margin-top: 8px; font-weight: 600; color: var(--text)"
-            >Topic (optional)</label
-          >
+
+          <span class="field-label" style="margin-top: 10px">Topic</span>
+          <span class="field-hint">Topics update when the class name matches items in your library.</span>
+          <label class="field-label" for="topicSelect">From library</label>
+          <select id="topicSelect" class="field" aria-label="Pick existing topic for this class">
+            <option value="">— Pick an existing topic —</option>
+          </select>
+          <label class="field-label" for="topic">Manual</label>
           <input
             id="topic"
             type="text"
             placeholder="e.g. Lecture 4 — Op amps"
             style="width: 100%; margin-top: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; font-size: 12px"
           />
+
+          <button id="refreshTaxonomyBtn" type="button">Refresh class &amp; topic lists</button>
           <div class="row" style="margin-top: 10px">
             <button id="saveLibraryBtn" type="button">Save library settings</button>
             <button id="exportLibraryBtn" type="button">Export to Library</button>

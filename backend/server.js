@@ -546,6 +546,186 @@ async function processUploadedMediaJob(jobId, file) {
   try { await fs.unlink(file.path); } catch (_) {}
 }
 
+// ---------- Quiz generation (class corpus) ----------
+
+function trimCorpus(input, maxChars = 120_000) {
+  const s = String(input || '').replace(/\s+/g, ' ').trim();
+  return s.length <= maxChars ? s : s.slice(0, maxChars);
+}
+
+async function openAIGenerateQuiz(corpus, { courseTitle } = {}) {
+  const text = trimCorpus(corpus);
+  const header = courseTitle ? `Course / class: ${courseTitle}\n\n` : '';
+  const userContent = [
+    `${header}Use ONLY the following study materials. Do not invent facts not supported by the text.`,
+    '',
+    'MATERIALS:',
+    text,
+    '',
+    'Return a single JSON object with exactly these keys:',
+    '- "flashcards": array of 8–16 objects, each { "front": string (question or term), "back": string (answer or definition) }.',
+    '- "questions": array of 8–14 multiple-choice objects, each { "question": string, "choices": string[] (length 4), "correctIndex": number (0–3) }.',
+    'Cover important concepts from the materials. Vary difficulty. "correctIndex" must match the correct choice position.',
+    'JSON only — no markdown fences or commentary.'
+  ].join('\n');
+
+  const response = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    temperature: 0.35,
+    response_format: { type: 'json_object' },
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You create practice quizzes and flashcards for students. Output must be valid JSON matching the user schema.'
+      },
+      { role: 'user', content: userContent }
+    ]
+  });
+
+  const raw = response.choices?.[0]?.message?.content?.trim();
+  if (!raw) throw new Error('OpenAI returned empty quiz JSON.');
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('Quiz response was not valid JSON.');
+  }
+
+  const flashcards = Array.isArray(parsed.flashcards) ? parsed.flashcards : [];
+  const questions = Array.isArray(parsed.questions) ? parsed.questions : [];
+
+  const normFlash = flashcards
+    .map((c) => ({
+      front: String(c.front || '').trim(),
+      back: String(c.back || '').trim()
+    }))
+    .filter((c) => c.front && c.back);
+
+  const normMcq = questions
+    .map((q) => {
+      const choices = Array.isArray(q.choices) ? q.choices.map((x) => String(x || '').trim()) : [];
+      const idx = Number(q.correctIndex);
+      return {
+        question: String(q.question || '').trim(),
+        choices,
+        correctIndex: Number.isFinite(idx) ? Math.min(3, Math.max(0, Math.round(idx))) : 0
+      };
+    })
+    .filter((q) => q.question && q.choices.length === 4);
+
+  return {
+    flashcards: normFlash,
+    questions: normMcq,
+    model: OPENAI_MODEL
+  };
+}
+
+app.post('/generate-quiz', async (req, res) => {
+  try {
+    if (!openai) {
+      return res.status(503).json({
+        error: 'Quiz generation requires OPENAI_API_KEY. Set it in backend/.env and restart the server.'
+      });
+    }
+
+    const { corpus, courseTitle } = req.body || {};
+    const text = String(corpus || '').trim();
+
+    if (text.length < 80) {
+      return res.status(400).json({
+        error:
+          'Not enough content to build a quiz. Add summaries, notes, transcripts, or summarize uploaded documents for this class.'
+      });
+    }
+
+    const result = await openAIGenerateQuiz(text, { courseTitle });
+    if (!result.flashcards.length && !result.questions.length) {
+      return res.status(500).json({ error: 'Model returned no flashcards or questions. Try again.' });
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('[/generate-quiz]', error);
+    res.status(500).json({ error: error.message || 'quiz generation failed' });
+  }
+});
+
+// ---------- Study sheet (class corpus → Markdown) ----------
+
+async function openAIGenerateStudySheet(corpus, { courseTitle } = {}) {
+  const text = trimCorpus(corpus);
+  const titleLine = courseTitle ? `Study sheet — ${courseTitle}` : 'Study sheet';
+
+  const userContent = [
+    `Create one comprehensive study sheet as **Markdown only** (no HTML, no JSON).`,
+    `The first line must be exactly: # ${titleLine}`,
+    '',
+    'Use ONLY the following course materials. Do not invent facts not supported by the text.',
+    '',
+    'MATERIALS:',
+    text,
+    '',
+    'Formatting requirements:',
+    '- Use ## and ### section headings to organize (e.g. Overview, Key definitions, Core concepts, Procedures, Formulas & notation, Worked patterns, Exam tips, Quick review).',
+    '- Use bullet and numbered lists; **bold** key terms on first use.',
+    '- Use `inline code` for symbols, variables, units; fenced ``` blocks for multi-line equations if needed.',
+    '- Include a compact table only if it genuinely helps compare concepts (Markdown pipe tables).',
+    '- Optimize for skimming: short paragraphs, clear hierarchy, whitespace.',
+    '- End with a **Quick review** section: bullet list of the most testable points.',
+    '- Do not wrap the document in markdown code fences.'
+  ].join('\n');
+
+  const response = await openai.chat.completions.create({
+    model: OPENAI_MODEL,
+    temperature: 0.25,
+    messages: [
+      {
+        role: 'system',
+        content:
+          'You write excellent university study sheets. Output Markdown only — no preamble or commentary outside the document.'
+      },
+      { role: 'user', content: userContent }
+    ]
+  });
+
+  const studySheet = response.choices?.[0]?.message?.content?.trim();
+  if (!studySheet) throw new Error('OpenAI returned empty study sheet.');
+  return { studySheet, model: OPENAI_MODEL };
+}
+
+app.post('/generate-study-sheet', async (req, res) => {
+  try {
+    if (!openai) {
+      return res.status(503).json({
+        error:
+          'Study sheet generation requires OPENAI_API_KEY. Set it in backend/.env and restart the server.'
+      });
+    }
+
+    const { corpus, courseTitle } = req.body || {};
+    const text = String(corpus || '').trim();
+
+    if (text.length < 80) {
+      return res.status(400).json({
+        error:
+          'Not enough content to build a study sheet. Add summaries, notes, transcripts, or summarize uploaded documents for this class.'
+      });
+    }
+
+    const result = await openAIGenerateStudySheet(text, { courseTitle });
+    if (!result.studySheet || result.studySheet.length < 40) {
+      return res.status(500).json({ error: 'Model returned an empty study sheet. Try again.' });
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error('[/generate-study-sheet]', error);
+    res.status(500).json({ error: error.message || 'study sheet generation failed' });
+  }
+});
+
 // ---------- Misc ----------
 
 app.get('/search', (req, res) => {

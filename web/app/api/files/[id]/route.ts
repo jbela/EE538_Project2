@@ -15,6 +15,10 @@ export async function GET(request: Request, ctx: Ctx) {
     return new Response('Unauthorized', { status: 401 });
   }
 
+  const url = new URL(request.url);
+  const inline =
+    url.searchParams.get('inline') === '1' || url.searchParams.get('disposition') === 'inline';
+
   const { id } = await ctx.params;
   const item = await prisma.libraryItem.findUnique({ where: { id } });
   if (!item?.storedFileName) {
@@ -32,10 +36,12 @@ export async function GET(request: Request, ctx: Ctx) {
   const mime = item.mimeType || mimeForStoredFile(item.originalFileName || '', null);
   const downloadName = asciiFilename(item.originalFileName || 'file');
 
+  const disposition = inline ? `inline; filename="${downloadName}"` : `attachment; filename="${downloadName}"`;
+
   return new Response(new Uint8Array(buffer), {
     headers: {
       'Content-Type': mime,
-      'Content-Disposition': `attachment; filename="${downloadName}"`,
+      'Content-Disposition': disposition,
       'Cache-Control': 'private, no-store',
     },
   });

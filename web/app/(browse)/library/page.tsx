@@ -5,6 +5,7 @@ import { prisma } from '@/lib/prisma';
 import { isLibraryBrowserSession } from '@/lib/library-access';
 import {
   decodeCourseParam,
+  encodeCourseParam,
   filterByCourse,
   filterByTopic,
   groupItemsByTopic,
@@ -76,8 +77,8 @@ export default async function LibraryPage({ searchParams }: Props) {
     : courseDecoded;
 
   return (
-    <div className="px-5 py-10 lg:px-8">
-      <div className="mx-auto max-w-3xl">
+    <div className="px-4 py-10 sm:px-6 lg:px-10">
+      <div className="mx-auto w-full max-w-7xl">
         <LibraryBulkProvider allowBulkDelete={allowBulkDelete}>
           <div className="flex flex-col gap-4 border-b border-stone-200/80 pb-6 sm:flex-row sm:items-end sm:justify-between">
             <div>
@@ -87,12 +88,27 @@ export default async function LibraryPage({ searchParams }: Props) {
                 {courseDecoded !== 'all' ? ' in this class' : ''}
                 {topicRaw ? ` · topic “${topicRaw}”` : ''}
               </p>
-              <Link
-                href="/library/add"
-                className="mt-3 inline-flex text-sm font-medium text-sky-600 hover:text-sky-700"
-              >
-                + Add notes or files
-              </Link>
+              <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2">
+                <Link href="/library/add" className="text-sm font-medium text-sky-600 hover:text-sky-700">
+                  + Add notes or files
+                </Link>
+                {courseDecoded !== 'all' && courseDecoded !== 'uncategorized' && (
+                  <>
+                    <Link
+                      href={`/library/quiz?course=${encodeCourseParam(courseDecoded)}`}
+                      className="text-sm font-medium text-violet-700 hover:text-violet-800"
+                    >
+                      Quiz mode
+                    </Link>
+                    <Link
+                      href={`/library/study-sheet?course=${encodeCourseParam(courseDecoded)}`}
+                      className="text-sm font-medium text-emerald-700 hover:text-emerald-800"
+                    >
+                      Study sheet
+                    </Link>
+                  </>
+                )}
+              </div>
             </div>
             <Suspense fallback={<div className="h-9 w-56 animate-pulse rounded-lg bg-stone-100" />}>
               <LibraryToolbar />

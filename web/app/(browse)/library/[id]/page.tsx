@@ -4,6 +4,8 @@ import { prisma } from '@/lib/prisma';
 import { isLibraryBrowserSession } from '@/lib/library-access';
 import { encodeCourseParam } from '@/lib/library-org';
 import { kindLabel, KIND_FILE_UPLOAD, KIND_TEXT_NOTE } from '@/lib/material-kinds';
+import { extFromName } from '@/lib/uploads';
+import { LibraryFilePanel } from '@/components/library-file-panel';
 import { DeleteItemButton } from '@/components/delete-item-button';
 import { ItemMetadataEditor } from '@/components/item-metadata-editor';
 
@@ -31,8 +33,10 @@ export default async function LibraryItemPage({ params }: Props) {
       `/library?course=${encodeCourseParam(item.courseLabel)}`
     : '/library';
 
+  const fileExt = extFromName(item.originalFileName || '');
+
   return (
-    <div className="mx-auto max-w-3xl px-5 py-10 lg:px-8">
+    <div className="mx-auto w-full max-w-7xl px-4 py-10 sm:px-6 lg:px-10">
       <Link href={backHref} className="text-sm font-medium text-sky-600 hover:text-sky-700">
         ← Back to library
       </Link>
@@ -56,19 +60,12 @@ export default async function LibraryItemPage({ params }: Props) {
       />
 
       {item.kind === KIND_FILE_UPLOAD && item.storedFileName && (
-        <section className="mt-6 rounded-xl border border-stone-200/80 bg-sky-50/40 p-4">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-sky-800/90">File</h2>
-          <p className="mt-1 text-sm text-slate-700">
-            {item.originalFileName || 'Attachment'}{' '}
-            {item.fileSize ? <span className="text-slate-500">({formatBytes(item.fileSize)})</span> : null}
-          </p>
-          <a
-            href={`/api/files/${item.id}`}
-            className="mt-3 inline-flex rounded-lg bg-sky-500 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-sky-600"
-          >
-            Download
-          </a>
-        </section>
+        <LibraryFilePanel
+          itemId={item.id}
+          originalFileName={item.originalFileName}
+          ext={fileExt}
+          fileSizeLabel={item.fileSize ? formatBytes(item.fileSize) : null}
+        />
       )}
 
       {item.sourceUrl && item.kind !== KIND_FILE_UPLOAD && (
@@ -109,13 +106,29 @@ export default async function LibraryItemPage({ params }: Props) {
         </section>
       )}
 
-      <section className="mt-10 rounded-xl border border-dashed border-violet-200/80 bg-violet-50/30 p-4">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-violet-800/80">Study tools</h2>
-        <p className="mt-2 text-sm text-slate-600">
-          Coming next: generate flashcards, study mode, or cheat sheets from this item with AI — all kept in
-          this app next to your summaries and uploads.
-        </p>
-      </section>
+      {item.courseLabel?.trim() && (
+        <section className="mt-10 rounded-xl border border-dashed border-violet-200/80 bg-violet-50/30 p-4">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-violet-800/80">Study tools</h2>
+          <p className="mt-2 text-sm text-slate-600">
+            Quiz mode and study sheets use everything saved under this class — summaries, notes, transcripts, and
+            extracted document text.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Link
+              href={`/library/quiz?course=${encodeCourseParam(item.courseLabel)}`}
+              className="inline-flex rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-violet-700"
+            >
+              Open class quiz
+            </Link>
+            <Link
+              href={`/library/study-sheet?course=${encodeCourseParam(item.courseLabel)}`}
+              className="inline-flex rounded-lg border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-800 shadow-sm hover:bg-emerald-50"
+            >
+              Study sheet
+            </Link>
+          </div>
+        </section>
+      )}
 
       <DeleteItemButton itemId={item.id} itemTitle={item.title} />
     </div>

@@ -145,8 +145,8 @@ export function AddMaterialForm() {
               className="mt-2 block w-full text-sm text-slate-600 file:mr-3 file:rounded-lg file:border-0 file:bg-sky-50 file:px-3 file:py-2 file:text-sm file:font-medium file:text-sky-800 hover:file:bg-sky-100"
             />
             <p className="mt-2 text-xs text-slate-400">
-              PDF, PowerPoint, Word, text, Markdown — max 25 MB. (Future: AI can read these for flashcards /
-              study mode.)
+              PDF, PowerPoint, Word, text, Markdown — max 25 MB. On the item page you can preview files, run AI
+              summarize, and use class quiz mode from the library.
             </p>
           </div>
           <button

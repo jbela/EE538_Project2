@@ -16,9 +16,9 @@ export async function SiteNav() {
           <Image
             src="/lecture-library-icon.png"
             alt=""
-            width={22}
-            height={22}
-            className="size-[1.125rem] shrink-0 object-contain"
+            width={44}
+            height={44}
+            className="size-11 shrink-0 object-contain"
             priority
             aria-hidden
           />
